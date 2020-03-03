@@ -33,6 +33,22 @@ int useless_gpu_add_one(int t) {
     return result;
 }
 
+__global__
+void gpuGEMM(double* __restrict__ A, double* __restrict__ B,
+           double* __restrict__ C, double alpha, double beta,
+           int M, int N, int K) {
+
+    uint i = (blockIdx.y * blockDim.y) + threadIdx.y; // let this correspond to row index
+    uint j = (blockIdx.x * blockDim.x) + threadIdx.x; // let this correspond to column index 
+
+    if (i < M && j < N){ 
+        C[j*M + i] = beta*C[j*M + i]; 
+        for (int k = 0; k < K; k++){
+            C[j*M + i] += alpha*A[k*M + i]*B[j*K + k]; 
+        }
+    }
+}
+
 /*
 Routine to perform an in-place GEMM operation, i.e., C := alpha*A*B + beta*C
 */
@@ -40,6 +56,16 @@ int myGEMM(double* __restrict__ A, double* __restrict__ B,
            double* __restrict__ C, double* alpha, double* beta,
            int M, int N, int K) {
     /* TODO: Write an efficient GEMM implementation on GPU */
+
+    // here is where I need to implement the CUDA GEMM kernel
+    // - need to dereference alpha and beta via *alpha before using them 
+    // - A, B, C are all device arrays at this point 
+
+    dim3 threadsPerBlock(8, 32);  // 256 threads
+    int num_blocks_x = (N + threadsPerBlock.x - 1)/threadsPerBlock.x; // N is number of columns
+    int num_blocks_y = (M + threadsPerBlock.y - 1)/threadsPerBlock.y; // M is number of rows
+    dim3 numBlocks(num_blocks_x, num_blocks_y); 
+    gpuGEMM<<<numBlocks, threadsPerBlock>>>(A, B, C, *alpha, *beta, M, N, K); 
 
     return 1;
 }

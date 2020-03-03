@@ -72,6 +72,7 @@ int checkNNErrors(NeuralNetwork& seq_nn, NeuralNetwork& par_nn,
     return error;
 }
 
+// M, N, K = NI, NJ, NK. A is MxK, B is KxN, C is MxN. 
 void createMATS(double* A, double* B, double* C1, double* C2, int NI, int NJ,
                 int NK) {
     int i, j;
@@ -79,12 +80,14 @@ void createMATS(double* A, double* B, double* C1, double* C2, int NI, int NJ,
     for(j = 0; j < NK; j++) {
         for(i = 0; i < NI; i++) {
             A[i + j*NI] = ((double) i*j) / NI;
+            // A[i + j*NI] = ((double) i*j); // for debugging 
         }
     }
 
     for(j = 0; j < NJ; j++) {
         for(i = 0; i < NK; i++) {
             B[i + j*NK] = ((double) i*j + 1) / NJ;
+            // B[i + j*NK] = ((double) i*j + 1); // for debugging 
         }
     }
 
@@ -92,10 +95,12 @@ void createMATS(double* A, double* B, double* C1, double* C2, int NI, int NJ,
         for(i = 0; i < NI; i++) {
             C1[i + j*NI] = 0;
             C2[i + j*NI] = ((double) i*j + 2) / NJ;
+            // C2[i + j*NI] = ((double) i*j + 2); // for debugging 
         }
     }
 }
 
+// called by TestGEMM
 int compareGEMMResults(double* myC, double* refC, int NI, int NJ) {
     int i, j;
     int fail = 0;
@@ -228,6 +233,37 @@ void TestGEMM(int M, int N, int K) {
 
     cudaMemcpy(C1, dC1, sizeof(double) * M * N, cudaMemcpyDeviceToHost);
 
+    // Jeremy debugging 
+    // for (int i = 0; i < M; i++){
+    //     for (int j = 0; j < N; j++){
+    //             std::cout << "The " << i << ", " << j << " component of C1 is: " << C1[j*M+i] << std::endl;            
+    //     }
+    // }
+    // for (int i = 0; i < M; i++){
+    //     for (int j = 0; j < K; j++){
+    //             std::cout << "The " << i << ", " << j << " component of A is: " << A[j*M+i] << std::endl;            
+    //     }
+    // }
+    // for (int i = 0; i < K; i++){
+    //     for (int j = 0; j < N; j++){
+    //             std::cout << "The " << i << ", " << j << " component of B is: " << B[j*K+i] << std::endl;            
+    //     }
+    // }
+    // std::cout << "alpha and beta are: " << alpha << " and " << beta << std::endl; 
+
+    // int count = 0; 
+    // for (int i = 0; i < M; i++){
+    //     for (int j = 0; j < N; j++){
+    //         if (abs(C1[j*M + i]-C2[j*M + i])>1.0e-3){
+    //             std::cout << "comparing output at entry " << i << ", " << j << ": " << C1[j*M + i] << " should be: " << C2[j*M + i] << std::endl;
+    //             count += 1; 
+    //         }
+            
+    //     }
+    // }
+    // std:: cout << "there are a total of " << count << " errors for a matrix of size " << M*N << std::endl; 
+
+
     int fail = compareGEMMResults(C1, C2, M, N);
 
     if(fail == 0) {
@@ -248,6 +284,8 @@ void TestGEMM(int M, int N, int K) {
     cudaFree(dummy);
 }
 
+// calls TestGEMM for two different matrices 
+// desired output is MxN. K is the inner dimension of A and B. 
 void BenchmarkGEMM() {
 
     std::cout << std::endl << "Entering GEMM Benchmarking mode! Stand by."
@@ -261,8 +299,9 @@ void BenchmarkGEMM() {
     TestGEMM(M, N, K);
     std::cout << "Completed GEMM 1" << std::endl;
 
-    /* Secong GEMM Problem Size */
+    /* Second GEMM Problem Size */
     M = 800*SCALE, N = 10*SCALE, K = 1000*SCALE;
+
     std::cout << std::endl << "Starting GEMM 2: " << "M = " << M << "; N = "
               << N << "; K = " << K << std::endl;
     TestGEMM(M, N, K);
