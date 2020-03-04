@@ -104,7 +104,7 @@ void feedforward(NeuralNetwork& nn, const arma::mat& X, struct cache& cache) {
 
     // calculate first set of activations
     arma::mat a1;
-    GPUsigmoid(z1, a1);
+    sigmoid(z1, a1);
     cache.a[0] = a1;
 
     // calculate input to sigmoid. 
@@ -304,7 +304,7 @@ void GPUfeedforward(NeuralNetwork& nn, const arma::mat& X, struct cache& cache) 
 
     // calculate first set of activations
     arma::mat a1;
-    sigmoid(z1, a1);
+    GPUsigmoid(z1, a1);
     cache.a[0] = a1;
 
     // calculate input to sigmoid. 
@@ -315,7 +315,15 @@ void GPUfeedforward(NeuralNetwork& nn, const arma::mat& X, struct cache& cache) 
 
     // calculate second set of activations
     arma::mat a2;
-    softmax(z2, a2);
+    a2.set_size(z2.n_rows, z2.n_cols);
+    double* dz2; 
+    double* da2;
+    cudaMalloc((void**)&dz2, sizeof(double) * z2.n_rows * z2.n_cols);
+    cudaMalloc((void**)&da2, sizeof(double) * a2.n_rows * a2.n_cols);
+    cudaMemcpy(dz2, z2.memptr(), sizeof(double) * z2.n_rows * z2.n_cols, cudaMemcpyHostToDevice);
+    cudaMemcpy(da2, a2.memptr(), sizeof(double) * a2.n_rows * a2.n_cols, cudaMemcpyHostToDevice);
+    GPUsoftmax(dz2, da2, a2.n_rows, a2.n_cols);
+    cudaMemcpy(a2.memptr(), da2, sizeof(double) * a2.n_rows * a2.n_cols, cudaMemcpyDeviceToHost);
     cache.a[1] = cache.yc = a2;
 }
 

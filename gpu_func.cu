@@ -62,6 +62,52 @@ void sigmoidKernel(double* mat1, double* mat2, int M, int N) {
     }
 }
 
+__global__
+void exponentialKernel(double* mat1, double* mat2, int M, int N) {
+
+    uint i = (blockIdx.y * blockDim.y) + threadIdx.y; // let this correspond to row index
+    uint j = (blockIdx.x * blockDim.x) + threadIdx.x; // let this correspond to column index 
+
+    if (i < M && j < N){ 
+        mat2[j*M + i] = exp(mat1[j*M + i]); 
+    }
+}
+
+__global__
+void softmaxKernel(double* mat1, double* mat2, int M, int N) {
+
+    uint i = (blockIdx.y * blockDim.y) + threadIdx.y; // let this correspond to row index
+    uint j = (blockIdx.x * blockDim.x) + threadIdx.x; // let this correspond to column index 
+
+    if (i < M && j < N){ 
+        mat2[j*M + i] = mat2[j*M+i]/mat1[j*M+i]; 
+    }
+}
+
+__global__
+void sumcols(double* mat1, double* mat2, int M, int N) {
+
+    uint j = (blockIdx.x * blockDim.x) + threadIdx.x; // let this correspond to column index 
+    if (j < N){ 
+        mat2[j] = 0.0; 
+        for (int i = 0; i < M; i++){
+                mat2[j] += mat1[j*M + i]; 
+        }
+    }
+}
+
+
+__global__
+void repmat(double* mat1, double* mat2, int M, int N) {
+
+    uint j = (blockIdx.x * blockDim.x) + threadIdx.x; // let this correspond to column index 
+    if (j < N){ 
+        for (int i = 0; i < M; i++){
+                mat2[j*M + i] = mat1[j]; 
+        }
+    }
+}
+
 /*
 Routine to perform an in-place GEMM operation, i.e., C := alpha*A*B + beta*C
 */
@@ -103,6 +149,10 @@ int wrapperGEMM(double* __restrict__ A, double* __restrict__ B,
     int err = myGEMM(dA, dB, dC, alpha, beta, M, N, K); 
     cudaMemcpy(C, dC, sizeof(double) * M * N, cudaMemcpyDeviceToHost);
 
+    cudaFree(dA);
+    cudaFree(dB);
+    cudaFree(dC); 
+
     return 1;
 }
 
@@ -131,12 +181,43 @@ void GPUsigmoid(const arma::mat& mat1, arma::mat& mat2) {
     sigmoidKernel<<<numBlocks, threadsPerBlock>>>(dmat1, dmat2, M, N); 
 
     cudaMemcpy(mat2.memptr(), dmat2, sizeof(double) * M * N, cudaMemcpyDeviceToHost);
+
+    cudaFree(dmat1);
+    cudaFree(dmat2);
 }
 
-// void softmax(const arma::mat& mat, arma::mat& mat2) {
-//     mat2.set_size(mat.n_rows, mat.n_cols);
-//     arma::mat exp_mat = arma::exp(mat);
-//     arma::mat sum_exp_mat = arma::sum(exp_mat, 0);
-//     mat2 = exp_mat / repmat(sum_exp_mat, mat.n_rows, 1);
-// }
+void GPUsoftmax(double* mat, double* mat2, int M, int N) {
+
+    dim3 threadsPerBlock(8, 32);  // 256 threads
+    int num_blocks_x = (N + threadsPerBlock.x - 1)/threadsPerBlock.x; // N is number of columns
+    int num_blocks_y = (M + threadsPerBlock.y - 1)/threadsPerBlock.y; // M is number of rows
+    dim3 numBlocks(num_blocks_x, num_blocks_y); 
+
+    // calculate exponential of each element
+    exponentialKernel<<<numBlocks, threadsPerBlock>>>(mat, mat2, M, N); 
+
+    // sum columns of exponential matrix 
+    // double* d_sum_exp_mat; 
+    // cudaMalloc((void**)&d_sum_exp_mat, sizeof(double) * 1 * N);
+    // dim3 threadsPerBlock2(256);
+    // num_blocks_x = (N + threadsPerBlock2.x - 1)/threadsPerBlock2.x; // N is number of columns
+    // dim3 numBlocks2(num_blocks_x);
+    // sumcols<<<numBlocks2, threadsPerBlock2>>>(mat2, d_sum_exp_mat,M, N);
+
+    // // replicate this row vector into a matrix 
+    // double* d_denom; 
+    // cudaMalloc((void**)&d_denom, sizeof(double) * M * N);
+    // repmat<<<numBlocks, threadsPerBlock>>>(d_sum_exp_mat, d_denom, M, N); 
+
+    // // finally calculate sigmoid 
+    // dim3 threadsPerBlock3(8, 32);  // 256 threads
+    // num_blocks_x = (N + threadsPerBlock3.x - 1)/threadsPerBlock3.x; // N is number of columns
+    // num_blocks_y = (M + threadsPerBlock3.y - 1)/threadsPerBlock3.y; // M is number of rows
+    // dim3 numBlocks3(num_blocks_x, num_blocks_y); 
+    // sigmoidKernel<<<numBlocks3, threadsPerBlock3>>>(d_denom, mat2, M, N); 
+
+    // arma::mat exp_mat = arma::exp(mat);
+    // arma::mat sum_exp_mat = arma::sum(exp_mat, 0); // For matrix M, return the sum of elements in each column (dim=0), or each row (dim=1)
+    // mat2 = exp_mat / repmat(sum_exp_mat, mat.n_rows, 1); // Element-wise division of an object by another object or a scalar
+}
 

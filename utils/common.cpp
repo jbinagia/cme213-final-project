@@ -13,8 +13,9 @@ void sigmoid(const arma::mat& mat, arma::mat& mat2) {
 void softmax(const arma::mat& mat, arma::mat& mat2) {
     mat2.set_size(mat.n_rows, mat.n_cols);
     arma::mat exp_mat = arma::exp(mat);
-    arma::mat sum_exp_mat = arma::sum(exp_mat, 0);
-    mat2 = exp_mat / repmat(sum_exp_mat, mat.n_rows, 1);
+    // arma::mat sum_exp_mat = arma::sum(exp_mat, 0);
+    // mat2 = exp_mat / repmat(sum_exp_mat, mat.n_rows, 1);
+    mat2 = exp_mat; // for debugging 
 }
 
 /*

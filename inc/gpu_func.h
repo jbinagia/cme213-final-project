@@ -54,4 +54,21 @@ int wrapperGEMM(double* A, double* B, double* C, double* alpha, double* beta, in
 
 void GPUsigmoid(const arma::mat& mat, arma::mat& mat2);
 
+void GPUsoftmax(double* mat, double* mat2, int M, int N); 
+
+__global__
+void sigmoidKernel(double* mat1, double* mat2, int M, int N);
+
+__global__
+void exponentialKernel(double* mat1, double* mat2, int M, int N);
+
+__global__
+void softmaxKernel(double* mat1, double* mat2, int M, int N);
+
+__global__
+void sumcols(double* mat1, double* mat2, int M, int N);
+
+__global__
+void repmat(double* mat1, double* mat2, int M, int N);
+
 #endif
