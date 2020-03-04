@@ -338,22 +338,37 @@ void GPUbackprop(NeuralNetwork& nn, const arma::mat& y, double reg,
     double* d_yc;
     double* d_y;
     double* d_diff; 
+    double* d_W1;
+    double* d_a0T;
     cudaMalloc((void**)&d_yc, sizeof(double) * M * N);
     cudaMalloc((void**)&d_y, sizeof(double) * M * N);
     cudaMalloc((void**)&d_diff, sizeof(double) * M * N);
+    cudaMalloc((void **)&d_W1, sizeof(double) * nn.W[1].n_rows * nn.W[1].n_cols);
+    cudaMalloc((void **)&d_a0T, sizeof(double) * bpcache.a[0].n_cols * bpcache.a[0].n_rows);
     cudaMemcpy(d_yc, bpcache.yc.memptr(), sizeof(double) * M * N, cudaMemcpyHostToDevice);
     cudaMemcpy(d_y, y.memptr(), sizeof(double) * M * N, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_W1, nn.W[1].memptr(), sizeof(double) * nn.W[1].n_rows * nn.W[1].n_cols, cudaMemcpyHostToDevice);
+    arma::mat a0T = bpcache.a[0].t(); // TODO: replace with GPU transpose. size is 800 x 100 
+    cudaMemcpy(d_a0T, a0T.memptr(), sizeof(double) * bpcache.a[0].n_cols * bpcache.a[0].n_rows, cudaMemcpyHostToDevice); // correct amount of memory being allocated
 
     // yc - y 
     GPUscalar_mult(-1.0, d_y, M, N); // since we want yc -y 
     GPUaddition(d_yc, d_y, d_diff, M, N);
     GPUscalar_mult(1.0/N, d_diff, M, N);
-    arma::mat diff = 0.0*y;
-    cudaMemcpy(diff.memptr(), d_diff, sizeof(double) * M * N, cudaMemcpyDeviceToHost);
 
+    // calculate gradients
+    double alpha = 1.0;
+    myGEMM(d_diff, d_a0T, d_W1, &alpha, &reg, nn.W[1].n_rows, nn.W[1].n_cols, N); // M, N, and K are 10, 100, 800 
+    arma::mat diff;
+    diff.set_size(M, N);
+    cudaMemcpy(diff.memptr(), d_diff, sizeof(double) * M * N, cudaMemcpyDeviceToHost); // this works fine
+    arma::mat dummy_mat;
+    dummy_mat.set_size(nn.W[1].n_rows, nn.W[1].n_cols);
+    std::cout << "Size of dw1 is: " << dummy_mat.n_rows << ", " << dummy_mat.n_cols << std::endl;
+    cudaMemcpy(dummy_mat.memptr(), d_W1, sizeof(double) * dummy_mat.n_rows * dummy_mat.n_cols, cudaMemcpyDeviceToHost);
+    bpgrads.dW[1] = dummy_mat; 
 
-    // TODO for backprop: 
-    bpgrads.dW[1] = diff * bpcache.a[0].t() + reg * nn.W[1];
+    // TODO for backprop:
     bpgrads.db[1] = arma::sum(diff, 1);
     arma::mat da1 = nn.W[1].t() * diff;
 
