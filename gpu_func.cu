@@ -197,24 +197,30 @@ void GPUsoftmax(double* mat, double* mat2, int M, int N) {
     exponentialKernel<<<numBlocks, threadsPerBlock>>>(mat, mat2, M, N); 
 
     // sum columns of exponential matrix 
-    // double* d_sum_exp_mat; 
-    // cudaMalloc((void**)&d_sum_exp_mat, sizeof(double) * 1 * N);
-    // dim3 threadsPerBlock2(256);
-    // num_blocks_x = (N + threadsPerBlock2.x - 1)/threadsPerBlock2.x; // N is number of columns
-    // dim3 numBlocks2(num_blocks_x);
-    // sumcols<<<numBlocks2, threadsPerBlock2>>>(mat2, d_sum_exp_mat,M, N);
+    double* d_sum_exp_mat; 
+    cudaMalloc((void**)&d_sum_exp_mat, sizeof(double) * 1 * N);
+    dim3 threadsPerBlock2(256);
+    num_blocks_x = (N + threadsPerBlock2.x - 1)/threadsPerBlock2.x; // N is number of columns
+    dim3 numBlocks2(num_blocks_x);
+    sumcols<<<numBlocks2, threadsPerBlock2>>>(mat2, d_sum_exp_mat,M, N);
 
-    // // replicate this row vector into a matrix 
-    // double* d_denom; 
-    // cudaMalloc((void**)&d_denom, sizeof(double) * M * N);
-    // repmat<<<numBlocks, threadsPerBlock>>>(d_sum_exp_mat, d_denom, M, N); 
+    // replicate this row vector into a matrix 
+    double* d_denom; 
+    cudaMalloc((void**)&d_denom, sizeof(double) * M * N);
+    repmat<<<numBlocks2, threadsPerBlock2>>>(d_sum_exp_mat, d_denom, M, N); 
+    // arma::mat test;
+    // test.set_size(1, N);
+    // cudaMemcpy(test.memptr(), d_sum_exp_mat, sizeof(double) * 1 * N, cudaMemcpyDeviceToHost);
+    // arma::mat arma_denom = repmat(test, M, 1);
+    // cudaMemcpy(d_denom, arma_denom.memptr(), sizeof(double) * M * N, cudaMemcpyHostToDevice); // get same error if I do this so replicaiton seems to be okay 
 
-    // // finally calculate sigmoid 
-    // dim3 threadsPerBlock3(8, 32);  // 256 threads
-    // num_blocks_x = (N + threadsPerBlock3.x - 1)/threadsPerBlock3.x; // N is number of columns
-    // num_blocks_y = (M + threadsPerBlock3.y - 1)/threadsPerBlock3.y; // M is number of rows
-    // dim3 numBlocks3(num_blocks_x, num_blocks_y); 
-    // sigmoidKernel<<<numBlocks3, threadsPerBlock3>>>(d_denom, mat2, M, N); 
+
+    // finally calculate sigmoid 
+    dim3 threadsPerBlock3(8, 32);  // 256 threads
+    num_blocks_x = (N + threadsPerBlock3.x - 1)/threadsPerBlock3.x; // N is number of columns
+    num_blocks_y = (M + threadsPerBlock3.y - 1)/threadsPerBlock3.y; // M is number of rows
+    dim3 numBlocks3(num_blocks_x, num_blocks_y); 
+    softmaxKernel<<<numBlocks3, threadsPerBlock3>>>(d_denom, mat2, M, N); 
 
     // arma::mat exp_mat = arma::exp(mat);
     // arma::mat sum_exp_mat = arma::sum(exp_mat, 0); // For matrix M, return the sum of elements in each column (dim=0), or each row (dim=1)
