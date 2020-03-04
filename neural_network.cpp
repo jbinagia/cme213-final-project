@@ -5,6 +5,7 @@
 #include "gpu_func.h"
 #include "mpi.h"
 #include "iomanip"
+#include "utils/test_utils.h"
 
 #define MPI_SAFE_CALL( call ) do {                               \
     int err = call;                                              \
@@ -89,25 +90,29 @@ void write_diff_gpu_cpu(NeuralNetwork& nn, int iter,
 
 /* CPU IMPLEMENTATIONS */
 void feedforward(NeuralNetwork& nn, const arma::mat& X, struct cache& cache) {
-    cache.z.resize(2);
-    cache.a.resize(2);
+    cache.z.resize(2);  // http://arma.sourceforge.net/docs.html#resize_member. Recreate the object according to given size specifications, while preserving the elements as well as the layout of the elements.
+    cache.a.resize(2);  // each cache is a std::vector of size 2. 
 
     // std::cout << W[0].n_rows << "\n";tw
     assert(X.n_rows == nn.W[0].n_cols);
     cache.X = X;
     int N = X.n_cols;
 
-    arma::mat z1 = nn.W[0] * X + arma::repmat(nn.b[0], 1, N);
+    // calculate input to sigmoid. W[i] are the weights of the i^th layer
+    arma::mat z1 = nn.W[0] * X + arma::repmat(nn.b[0], 1, N); // http://arma.sourceforge.net/docs.html#repmat. Generate a matrix by replicating matrix A in a block-like fashion.
     cache.z[0] = z1;
 
+    // calculate first set of activations
     arma::mat a1;
     sigmoid(z1, a1);
     cache.a[0] = a1;
 
+    // calculate input to sigmoid. 
     assert(a1.n_rows == nn.W[1].n_cols);
     arma::mat z2 = nn.W[1] * a1 + arma::repmat(nn.b[1], 1, N);
     cache.z[1] = z2;
 
+    // calculate second set of activations
     arma::mat a2;
     softmax(z2, a2);
     cache.a[1] = cache.yc = a2;
@@ -224,10 +229,10 @@ void train(NeuralNetwork& nn, const arma::mat& X, const arma::mat& y,
     int iter = 0;
     int print_flag = 0;
 
-    for(int epoch = 0 ; epoch < epochs; ++epoch) {
+    for(int epoch = 0 ; epoch < epochs; ++epoch) { // for each pass through the entire dataset (an epoch) 
         int num_batches = (N + batch_size - 1)/batch_size;
 
-        for(int batch = 0; batch < num_batches; ++batch) {
+        for(int batch = 0; batch < num_batches; ++batch) { // SGD. for each batch of input data. 
             int last_col = std::min((batch + 1)*batch_size-1, N-1);
             arma::mat X_batch = X.cols(batch * batch_size, last_col);
             arma::mat y_batch = y.cols(batch * batch_size, last_col);
@@ -279,6 +284,109 @@ void train(NeuralNetwork& nn, const arma::mat& X, const arma::mat& y,
     }
 }
 
+// GPU wrapper functions 
+void GPUfeedforward(NeuralNetwork& nn, const arma::mat& X, struct cache& cache) {
+    cache.z.resize(2);  // http://arma.sourceforge.net/docs.html#resize_member. Recreate the object according to given size specifications, while preserving the elements as well as the layout of the elements.
+    cache.a.resize(2);  // each cache is a std::vector of size 2. 
+
+    // std::cout << W[0].n_rows << "\n";tw
+    assert(X.n_rows == nn.W[0].n_cols);
+    cache.X = X;
+    int N = X.n_cols;
+
+    // calculate input to sigmoid. W[i] are the weights of the i^th layer
+    // arma::mat CPUz1 = nn.W[0] * X + arma::repmat(nn.b[0], 1, N); // http://arma.sourceforge.net/docs.html#repmat. Generate a matrix by replicating matrix A in a block-like fashion.
+    // arma::mat CPUz1 = arma::repmat(nn.b[0], 1, N); // this matches with what I have!
+    arma::mat CPUz1 = nn.W[0] * X; 
+
+    // arma::mat z1 = arma::repmat(nn.b[0], 1, N);
+    // z1.zeros();
+    // double *gpuz1 = z1.memptr(); 
+    // double *gpuW0 = nn.W[0].memptr(); // https://stackoverflow.com/questions/24020567/armadillo-obtain-raw-data-from-matrix-vector-as-array
+    // // double *gpuX = X.memptr(); // doesn't work cause trying to convert const double* to double*
+    // // const double *gpuX = X.memptr(); // doesn't work cause the function itself is looking for double* not const double*. plus they probably don't want us to edit function defs. 
+    // arma::mat myX = arma::repmat(X, 1, 1); 
+    // double *gpuX = myX.memptr(); 
+    // // if (almost_equal_matrix(z1, gpuz1, true) ){ 
+    // //     std::cout << "z1 and gpuz1 same bfore myGEMM" << std::endl; 
+    // // }
+    // double alpha = 1.0; 
+    // double beta = 0.0; 
+    // int err = myGEMM(gpuW0, gpuX, gpuz1, &alpha, &beta, z1.n_rows, z1.n_cols, X.n_rows); // matrix product is not being computed for some reason
+    // if (almost_equal_matrix(CPUz1, gpuz1, true) ){ 
+    //     std::cout << "CPUz1 and gpuz1 same after myGEMM" << std::endl; 
+    // }else
+    // {
+    //     // std::cout << "CPUz1 and gpuz1 not the same after myGEMM. 0, 0 component is: " << CPUz1(0,0) << " vs " << gpuz1[0] << std::endl; 
+    //     // std::cout << "W comparison: " << nn.W[0](10,0) << " vs " << gpuW0[10] << std::endl; 
+    //     // std::cout << "X comparison: " << X(10,0) << " vs " << myX[10] << std::endl; 
+    //     // nn.W[0].print("W0:");
+    //     // X.print("X:");
+
+    //     // for (int i = 0; i < nn.W[0].n_rows; i++){
+    //     //     for (int j=0; j < nn.W[0].n_cols; j++){
+    //     //         if (abs(nn.W[0](i,j)-gpuW0[nn.W[0].n_rows*j+i]>1.0e-6)){
+    //     //             std::cout << "difference in W at index: " << i << ", " << j << std::endl; 
+    //     //         }
+    //     //     }
+    //     // } // seems to be okay 
+    //     // for (int i = 0; i < X.n_rows; i++){
+    //     //     for (int j=0; j < X.n_cols; j++){
+    //     //         // if (abs(X(i,j)-gpuX[X.n_rows*j+i]>1.0e-6)){
+    //     //         //     std::cout << "difference in X at index: " << i << ", " << j << std::endl; 
+    //     //         // }
+    //     //         if (abs(X(i,j))>1.0e-6){
+    //     //             std::cout << "we have: " << X(i,j) << " and " << gpuX[X.n_rows*j+i] << std::endl; 
+    //     //         } // they definitely match 
+
+    //     //     }
+    //     // }
+    // }
+
+    // attempt 2 
+    int M = nn.W[0].n_rows; 
+    int K = X.n_rows; 
+    double* dW0;
+    double* dX;
+    double* dz1;
+    cudaMalloc((void**)&dW0, sizeof(double) * M * K);
+    cudaMalloc((void**)&dX, sizeof(double) * K * N);
+    cudaMalloc((void**)&dz1, sizeof(double) * M * N);
+    double *gpuW0 = nn.W[0].memptr(); 
+    arma::mat myX = arma::repmat(X, 1, 1); 
+    double *gpuX = myX.memptr(); 
+    arma::mat z1 = arma::repmat(nn.b[0], 1, N);
+    double *gpuz1 = z1.memptr(); 
+    cudaMemcpy(dW0, gpuW0, sizeof(double) * M * K, cudaMemcpyHostToDevice);
+    cudaMemcpy(dX, gpuX, sizeof(double) * K * N, cudaMemcpyHostToDevice);
+    cudaMemcpy(dz1, gpuz1, sizeof(double) * M * N, cudaMemcpyHostToDevice);
+    double alpha = 1.0; 
+    double beta = 1.0; 
+    int err = myGEMM(dW0, dX, dz1, &alpha, &beta, M, N, K); 
+    cudaMemcpy(gpuz1, dz1, sizeof(double) * M * N, cudaMemcpyDeviceToHost);
+
+    // so we can continue testing rest of code
+    // z1 = nn.W[0] * X + arma::repmat(nn.b[0], 1, N);
+    cache.z[0] = z1;
+
+
+    // calculate first set of activations
+    arma::mat a1;
+    // GPU1a1 = z1.memptr(); 
+    sigmoid(z1, a1);
+    cache.a[0] = a1;
+
+    // calculate input to sigmoid. 
+    assert(a1.n_rows == nn.W[1].n_cols);
+    arma::mat z2 = nn.W[1] * a1 + arma::repmat(nn.b[1], 1, N);
+    cache.z[1] = z2;
+
+    // calculate second set of activations
+    arma::mat a2;
+    softmax(z2, a2);
+    cache.a[1] = cache.yc = a2;
+}
+
 /*
  * TODO
  * Train the neural network &nn of rank 0 in parallel. Your MPI implementation
@@ -321,6 +429,26 @@ void parallel_train(NeuralNetwork& nn, const arma::mat& X, const arma::mat& y,
              * 4. update local network coefficient at each node
              */
 
+            int last_col = std::min((batch + 1)*batch_size-1, N-1);
+            arma::mat X_batch = X.cols(batch * batch_size, last_col);
+            arma::mat y_batch = y.cols(batch * batch_size, last_col);
+
+            struct cache bpcache;
+            GPUfeedforward(nn, X_batch, bpcache); // implement gpu version 
+
+            struct grads bpgrads;
+            backprop(nn, y_batch, reg, bpcache, bpgrads); // implement gpu version 
+
+            // Gradient descent step
+            for(int i = 0; i < nn.W.size(); ++i) {
+                nn.W[i] -= learning_rate * bpgrads.dW[i];
+            }
+
+            for(int i = 0; i < nn.b.size(); ++i) {
+                nn.b[i] -= learning_rate * bpgrads.db[i];
+            }
+
+            // do not make any edits past here. All of this should be fine. 
             if(print_every <= 0) {
                 print_flag = batch == 0;
             } else {

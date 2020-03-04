@@ -170,8 +170,8 @@ int main(int argc, char* argv[]) {
         num_epochs = 1;
         batch_size = 800;
         num_neuron = 100;
-        run_seq = 1;
-        debug = 1;
+        run_seq = 1; // and by default it runs sequential anew
+        debug = 1; // by default grading mode enables debug mode 
         print_every = 1;
         break;
 

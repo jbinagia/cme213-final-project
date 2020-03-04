@@ -5,6 +5,7 @@
 #include <cmath>
 #include <iostream>
 
+// definition of NeuralNetwork class
 class NeuralNetwork {
 public:
     const int num_layers = 2;
@@ -31,6 +32,8 @@ public:
 };
 
 void feedforward(NeuralNetwork& nn, const arma::mat& X, struct cache& bpcache);
+void GPUfeedforward(NeuralNetwork& nn, const arma::mat& X, struct cache& cache);
+
 double loss(NeuralNetwork& nn, const arma::mat& yc, const arma::mat& y,
             double reg);
 void backprop(NeuralNetwork& nn, const arma::mat& y, double reg,
