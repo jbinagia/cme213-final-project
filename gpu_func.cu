@@ -4,6 +4,8 @@
 #include <helper_functions.h>
 #include <iostream>
 #include "cublas_v2.h"
+#include <armadillo>
+#include "utils/common.h"
 
 __global__
 void device_add_one(int* d_result, int t) {
@@ -46,6 +48,17 @@ void gpuGEMM(double* __restrict__ A, double* __restrict__ B,
         for (int k = 0; k < K; k++){
             C[j*M + i] += alpha*A[k*M + i]*B[j*K + k]; 
         }
+    }
+}
+
+__global__
+void sigmoidKernel(double* mat1, double* mat2, int M, int N) {
+
+    uint i = (blockIdx.y * blockDim.y) + threadIdx.y; // let this correspond to row index
+    uint j = (blockIdx.x * blockDim.x) + threadIdx.x; // let this correspond to column index 
+
+    if (i < M && j < N){ 
+        mat2[j*M + i] = 1.0/(1.0 + exp(-mat1[j*M + i])); 
     }
 }
 
@@ -92,4 +105,38 @@ int wrapperGEMM(double* __restrict__ A, double* __restrict__ B,
 
     return 1;
 }
+
+void GPUsigmoid(const arma::mat& mat1, arma::mat& mat2) {
+
+    int M = mat1.n_rows; 
+    int N = mat1.n_cols; 
+
+    mat2.set_size(M, N);
+    ASSERT_MAT_SAME_SIZE(mat1, mat2);
+
+    dim3 threadsPerBlock(8, 32);  // 256 threads
+    int num_blocks_x = (N + threadsPerBlock.x - 1)/threadsPerBlock.x; // N is number of columns
+    int num_blocks_y = (M + threadsPerBlock.y - 1)/threadsPerBlock.y; // M is number of rows
+    dim3 numBlocks(num_blocks_x, num_blocks_y); 
+
+    double* dmat1;
+    double* dmat2;
+
+    cudaMalloc((void**)&dmat1, sizeof(double) * M * N);
+    cudaMalloc((void**)&dmat2, sizeof(double) * M * N);
+
+    cudaMemcpy(dmat1, mat1.memptr(), sizeof(double) * M * N, cudaMemcpyHostToDevice);
+    cudaMemcpy(dmat2, mat2.memptr(), sizeof(double) * M * N, cudaMemcpyHostToDevice);
+
+    sigmoidKernel<<<numBlocks, threadsPerBlock>>>(dmat1, dmat2, M, N); 
+
+    cudaMemcpy(mat2.memptr(), dmat2, sizeof(double) * M * N, cudaMemcpyDeviceToHost);
+}
+
+// void softmax(const arma::mat& mat, arma::mat& mat2) {
+//     mat2.set_size(mat.n_rows, mat.n_cols);
+//     arma::mat exp_mat = arma::exp(mat);
+//     arma::mat sum_exp_mat = arma::sum(exp_mat, 0);
+//     mat2 = exp_mat / repmat(sum_exp_mat, mat.n_rows, 1);
+// }
 

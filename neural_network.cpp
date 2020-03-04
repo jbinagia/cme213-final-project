@@ -104,7 +104,7 @@ void feedforward(NeuralNetwork& nn, const arma::mat& X, struct cache& cache) {
 
     // calculate first set of activations
     arma::mat a1;
-    sigmoid(z1, a1);
+    GPUsigmoid(z1, a1);
     cache.a[0] = a1;
 
     // calculate input to sigmoid. 
@@ -309,7 +309,8 @@ void GPUfeedforward(NeuralNetwork& nn, const arma::mat& X, struct cache& cache) 
 
     // calculate input to sigmoid. 
     assert(a1.n_rows == nn.W[1].n_cols);
-    arma::mat z2 = nn.W[1] * a1 + arma::repmat(nn.b[1], 1, N);
+    arma::mat z2 = arma::repmat(nn.b[1], 1, N); // initialize output 
+    err = wrapperGEMM(nn.W[1].memptr(), a1.memptr(), z2.memptr(), &alpha, &beta, nn.W[1].n_rows, z2.n_cols, a1.n_rows); 
     cache.z[1] = z2;
 
     // calculate second set of activations
