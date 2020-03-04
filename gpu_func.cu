@@ -69,3 +69,27 @@ int myGEMM(double* __restrict__ A, double* __restrict__ B,
 
     return 1;
 }
+
+// wrapper to automate allocating and transferring memory 
+int wrapperGEMM(double* __restrict__ A, double* __restrict__ B,
+           double* __restrict__ C, double* alpha, double* beta,
+           int M, int N, int K) {
+
+    double* dA;
+    double* dB;
+    double* dC;
+
+    cudaMalloc((void**)&dA, sizeof(double) * M * K);
+    cudaMalloc((void**)&dB, sizeof(double) * K * N);
+    cudaMalloc((void**)&dC, sizeof(double) * M * N);
+
+    cudaMemcpy(dA, A, sizeof(double) * M * K, cudaMemcpyHostToDevice);
+    cudaMemcpy(dB, B, sizeof(double) * K * N, cudaMemcpyHostToDevice);
+    cudaMemcpy(dC, C, sizeof(double) * M * N, cudaMemcpyHostToDevice);
+
+    int err = myGEMM(dA, dB, dC, alpha, beta, M, N, K); 
+    cudaMemcpy(C, dC, sizeof(double) * M * N, cudaMemcpyDeviceToHost);
+
+    return 1;
+}
+

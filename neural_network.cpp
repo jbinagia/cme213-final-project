@@ -295,84 +295,15 @@ void GPUfeedforward(NeuralNetwork& nn, const arma::mat& X, struct cache& cache) 
     int N = X.n_cols;
 
     // calculate input to sigmoid. W[i] are the weights of the i^th layer
-    // arma::mat CPUz1 = nn.W[0] * X + arma::repmat(nn.b[0], 1, N); // http://arma.sourceforge.net/docs.html#repmat. Generate a matrix by replicating matrix A in a block-like fashion.
-    // arma::mat CPUz1 = arma::repmat(nn.b[0], 1, N); // this matches with what I have!
-    arma::mat CPUz1 = nn.W[0] * X; 
-
-    // arma::mat z1 = arma::repmat(nn.b[0], 1, N);
-    // z1.zeros();
-    // double *gpuz1 = z1.memptr(); 
-    // double *gpuW0 = nn.W[0].memptr(); // https://stackoverflow.com/questions/24020567/armadillo-obtain-raw-data-from-matrix-vector-as-array
-    // // double *gpuX = X.memptr(); // doesn't work cause trying to convert const double* to double*
-    // // const double *gpuX = X.memptr(); // doesn't work cause the function itself is looking for double* not const double*. plus they probably don't want us to edit function defs. 
-    // arma::mat myX = arma::repmat(X, 1, 1); 
-    // double *gpuX = myX.memptr(); 
-    // // if (almost_equal_matrix(z1, gpuz1, true) ){ 
-    // //     std::cout << "z1 and gpuz1 same bfore myGEMM" << std::endl; 
-    // // }
-    // double alpha = 1.0; 
-    // double beta = 0.0; 
-    // int err = myGEMM(gpuW0, gpuX, gpuz1, &alpha, &beta, z1.n_rows, z1.n_cols, X.n_rows); // matrix product is not being computed for some reason
-    // if (almost_equal_matrix(CPUz1, gpuz1, true) ){ 
-    //     std::cout << "CPUz1 and gpuz1 same after myGEMM" << std::endl; 
-    // }else
-    // {
-    //     // std::cout << "CPUz1 and gpuz1 not the same after myGEMM. 0, 0 component is: " << CPUz1(0,0) << " vs " << gpuz1[0] << std::endl; 
-    //     // std::cout << "W comparison: " << nn.W[0](10,0) << " vs " << gpuW0[10] << std::endl; 
-    //     // std::cout << "X comparison: " << X(10,0) << " vs " << myX[10] << std::endl; 
-    //     // nn.W[0].print("W0:");
-    //     // X.print("X:");
-
-    //     // for (int i = 0; i < nn.W[0].n_rows; i++){
-    //     //     for (int j=0; j < nn.W[0].n_cols; j++){
-    //     //         if (abs(nn.W[0](i,j)-gpuW0[nn.W[0].n_rows*j+i]>1.0e-6)){
-    //     //             std::cout << "difference in W at index: " << i << ", " << j << std::endl; 
-    //     //         }
-    //     //     }
-    //     // } // seems to be okay 
-    //     // for (int i = 0; i < X.n_rows; i++){
-    //     //     for (int j=0; j < X.n_cols; j++){
-    //     //         // if (abs(X(i,j)-gpuX[X.n_rows*j+i]>1.0e-6)){
-    //     //         //     std::cout << "difference in X at index: " << i << ", " << j << std::endl; 
-    //     //         // }
-    //     //         if (abs(X(i,j))>1.0e-6){
-    //     //             std::cout << "we have: " << X(i,j) << " and " << gpuX[X.n_rows*j+i] << std::endl; 
-    //     //         } // they definitely match 
-
-    //     //     }
-    //     // }
-    // }
-
-    // attempt 2 
-    int M = nn.W[0].n_rows; 
-    int K = X.n_rows; 
-    double* dW0;
-    double* dX;
-    double* dz1;
-    cudaMalloc((void**)&dW0, sizeof(double) * M * K);
-    cudaMalloc((void**)&dX, sizeof(double) * K * N);
-    cudaMalloc((void**)&dz1, sizeof(double) * M * N);
-    double *gpuW0 = nn.W[0].memptr(); 
-    arma::mat myX = arma::repmat(X, 1, 1); 
-    double *gpuX = myX.memptr(); 
-    arma::mat z1 = arma::repmat(nn.b[0], 1, N);
-    double *gpuz1 = z1.memptr(); 
-    cudaMemcpy(dW0, gpuW0, sizeof(double) * M * K, cudaMemcpyHostToDevice);
-    cudaMemcpy(dX, gpuX, sizeof(double) * K * N, cudaMemcpyHostToDevice);
-    cudaMemcpy(dz1, gpuz1, sizeof(double) * M * N, cudaMemcpyHostToDevice);
+    arma::mat myX = arma::repmat(X, 1, 1);  // since our GEMM function does not accept const 
+    arma::mat z1 = arma::repmat(nn.b[0], 1, N); // initialize output 
     double alpha = 1.0; 
     double beta = 1.0; 
-    int err = myGEMM(dW0, dX, dz1, &alpha, &beta, M, N, K); 
-    cudaMemcpy(gpuz1, dz1, sizeof(double) * M * N, cudaMemcpyDeviceToHost);
-
-    // so we can continue testing rest of code
-    // z1 = nn.W[0] * X + arma::repmat(nn.b[0], 1, N);
+    int err = wrapperGEMM(nn.W[0].memptr(), myX.memptr(), z1.memptr(), &alpha, &beta, nn.W[0].n_rows, N, X.n_rows); 
     cache.z[0] = z1;
-
 
     // calculate first set of activations
     arma::mat a1;
-    // GPU1a1 = z1.memptr(); 
     sigmoid(z1, a1);
     cache.a[0] = a1;
 

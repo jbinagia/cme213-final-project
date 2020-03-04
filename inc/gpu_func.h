@@ -48,4 +48,7 @@ void gpuGEMM(double* A, double* B, double* C, double alpha, double beta, int M,
 int myGEMM(double* A, double* B, double* C, double* alpha, double* beta, int M,
            int N, int K);
 
+int wrapperGEMM(double* A, double* B, double* C, double* alpha, double* beta, int M,
+           int N, int K);
+
 #endif
