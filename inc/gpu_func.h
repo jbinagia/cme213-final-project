@@ -56,6 +56,10 @@ void GPUsigmoid(const arma::mat& mat, arma::mat& mat2);
 
 void GPUsoftmax(double* mat, double* mat2, int M, int N); 
 
+void GPUaddition(double* mat, double* mat2, double* output_mat, int M, int N);
+
+void GPUscalar_mult(double scalar, double* mat, int M, int N);
+
 __global__
 void sigmoidKernel(double* mat1, double* mat2, int M, int N);
 

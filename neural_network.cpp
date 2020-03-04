@@ -327,6 +327,42 @@ void GPUfeedforward(NeuralNetwork& nn, const arma::mat& X, struct cache& cache) 
     cache.a[1] = cache.yc = a2;
 }
 
+void GPUbackprop(NeuralNetwork& nn, const arma::mat& y, double reg,
+              const struct cache& bpcache, struct grads& bpgrads) {
+    bpgrads.dW.resize(2);
+    bpgrads.db.resize(2);
+    int M = y.n_rows; 
+    int N = y.n_cols;
+
+    // CUDA declarations and allocations
+    double* d_yc;
+    double* d_y;
+    double* d_diff; 
+    cudaMalloc((void**)&d_yc, sizeof(double) * M * N);
+    cudaMalloc((void**)&d_y, sizeof(double) * M * N);
+    cudaMalloc((void**)&d_diff, sizeof(double) * M * N);
+    cudaMemcpy(d_yc, bpcache.yc.memptr(), sizeof(double) * M * N, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_y, y.memptr(), sizeof(double) * M * N, cudaMemcpyHostToDevice);
+
+    // yc - y 
+    GPUscalar_mult(-1.0, d_y, M, N); // since we want yc -y 
+    GPUaddition(d_yc, d_y, d_diff, M, N);
+    GPUscalar_mult(1.0/N, d_diff, M, N);
+    arma::mat diff = 0.0*y;
+    cudaMemcpy(diff.memptr(), d_diff, sizeof(double) * M * N, cudaMemcpyDeviceToHost);
+
+
+    // TODO for backprop: 
+    bpgrads.dW[1] = diff * bpcache.a[0].t() + reg * nn.W[1];
+    bpgrads.db[1] = arma::sum(diff, 1);
+    arma::mat da1 = nn.W[1].t() * diff;
+
+    arma::mat dz1 = da1 % bpcache.a[0] % (1 - bpcache.a[0]); // % denotes Schur product: element-wise multiplication of two objects
+
+    bpgrads.dW[0] = dz1 * bpcache.X.t() + reg * nn.W[0];
+    bpgrads.db[0] = arma::sum(dz1, 1);
+}
+
 /*
  * TODO
  * Train the neural network &nn of rank 0 in parallel. Your MPI implementation
@@ -377,7 +413,7 @@ void parallel_train(NeuralNetwork& nn, const arma::mat& X, const arma::mat& y,
             GPUfeedforward(nn, X_batch, bpcache); // implement gpu version 
 
             struct grads bpgrads;
-            backprop(nn, y_batch, reg, bpcache, bpgrads); // implement gpu version 
+            GPUbackprop(nn, y_batch, reg, bpcache, bpgrads); // implement gpu version 
 
             // Gradient descent step
             for(int i = 0; i < nn.W.size(); ++i) {

@@ -32,11 +32,14 @@ public:
 };
 
 void feedforward(NeuralNetwork& nn, const arma::mat& X, struct cache& bpcache);
+
 void GPUfeedforward(NeuralNetwork& nn, const arma::mat& X, struct cache& cache);
 
 double loss(NeuralNetwork& nn, const arma::mat& yc, const arma::mat& y,
             double reg);
 void backprop(NeuralNetwork& nn, const arma::mat& y, double reg,
+              const struct cache& bpcache, struct grads& bpgrads);
+void GPUbackprop(NeuralNetwork& nn, const arma::mat& y, double reg,
               const struct cache& bpcache, struct grads& bpgrads);
 void numgrad(NeuralNetwork& nn, const arma::mat& X, const arma::mat& y,
              double reg, struct grads& numgrads);
