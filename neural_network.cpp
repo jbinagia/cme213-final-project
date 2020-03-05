@@ -343,19 +343,23 @@ void GPUbackprop(NeuralNetwork& nn, const arma::mat& y, double reg,
     double* d_y;
     double* d_diff; 
     double* d_W1;
+    double* d_W0;
     double* d_W1T;
     double* d_db1;
-    double *d_da1;
-    double *d_dz1_term1;
-    double *d_dz1_term2;
-    double *d_dz1;
-    double *d_db0;
-    double *d_a0;
+    double* d_da1;
+    double* d_dz1_term1;
+    double* d_dz1_term2;
+    double* d_dz1;
+    double* d_db0;
+    double* d_a0;
     double* d_a0T;
+    double* d_X;
+    double* d_XT;
     cudaMalloc((void**)&d_yc, sizeof(double) * M * N);
     cudaMalloc((void**)&d_y, sizeof(double) * M * N);
     cudaMalloc((void**)&d_diff, sizeof(double) * M * N);
     cudaMalloc((void **)&d_W1, sizeof(double) * nn.W[1].n_rows * nn.W[1].n_cols);
+    cudaMalloc((void **)&d_W0, sizeof(double) * nn.W[0].n_rows * nn.W[0].n_cols);
     cudaMalloc((void **)&d_W1T, sizeof(double) * nn.W[1].n_cols * nn.W[1].n_rows);
     cudaMalloc((void **)&d_db1, sizeof(double) * M * 1);
     cudaMalloc((void **)&d_da1, sizeof(double) * nn.W[1].n_cols * N);
@@ -365,9 +369,13 @@ void GPUbackprop(NeuralNetwork& nn, const arma::mat& y, double reg,
     cudaMalloc((void **)&d_db0, sizeof(double) * nn.W[1].n_cols * 1);
     cudaMalloc((void **)&d_a0, sizeof(double) * bpcache.a[0].n_rows * bpcache.a[0].n_cols);
     cudaMalloc((void **)&d_a0T, sizeof(double) * bpcache.a[0].n_cols * bpcache.a[0].n_rows);
+    cudaMalloc((void **)&d_X, sizeof(double) * bpcache.X.n_rows * bpcache.X.n_cols);
+    cudaMalloc((void **)&d_XT, sizeof(double) * bpcache.X.n_cols * bpcache.X.n_rows);
     cudaMemcpy(d_yc, bpcache.yc.memptr(), sizeof(double) * M * N, cudaMemcpyHostToDevice);
     cudaMemcpy(d_y, y.memptr(), sizeof(double) * M * N, cudaMemcpyHostToDevice);
     cudaMemcpy(d_W1, nn.W[1].memptr(), sizeof(double) * nn.W[1].n_rows * nn.W[1].n_cols, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_W0, nn.W[0].memptr(), sizeof(double) * nn.W[0].n_rows * nn.W[0].n_cols, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_X, bpcache.X.memptr(), sizeof(double) * bpcache.X.n_rows * bpcache.X.n_cols, cudaMemcpyHostToDevice);
 
     // yc - y
     GPUaddition(d_yc, d_y, d_diff, 1.0 / N, -1.0 / N, M, N);
@@ -412,6 +420,12 @@ void GPUbackprop(NeuralNetwork& nn, const arma::mat& y, double reg,
     cudaMemcpy(dz1.memptr(), d_dz1, sizeof(double) * nn.W[1].n_cols * N, cudaMemcpyDeviceToHost);
 
     // calculate dw0
+    arma::mat dW0;
+    dW0.set_size(nn.W[0].n_rows, nn.W[0].n_cols);
+    GPUtranspose(d_X, d_XT, bpcache.X.n_rows, bpcache.X.n_cols);
+    myGEMM(d_dz1, d_XT, d_W0, &alpha, &reg, nn.W[0].n_rows, nn.W[0].n_cols, N);
+    cudaMemcpy(dW0.memptr(), d_W0, sizeof(double) * nn.W[0].n_rows * nn.W[0].n_cols, cudaMemcpyDeviceToHost);
+    bpgrads.dW[0] = dW0;
 
     // calculat db0
     arma::mat db0;
@@ -426,7 +440,7 @@ void GPUbackprop(NeuralNetwork& nn, const arma::mat& y, double reg,
     // bpgrads.db[1] = arma::sum(diff, 1); // returns sum of elements in each row (result is a column vector)
     // arma::mat da1 = nn.W[1].t() * diff;
     // arma::mat dz1 = da1 % bpcache.a[0] % (1 - bpcache.a[0]); // % denotes Schur product: element-wise multiplication of two objects
-    bpgrads.dW[0] = dz1 * bpcache.X.t() + reg * nn.W[0];
+    // bpgrads.dW[0] = dz1 * bpcache.X.t() + reg * nn.W[0];
     // bpgrads.db[0] = arma::sum(dz1, 1);
 
     // Cuda deallocation 
@@ -434,6 +448,7 @@ void GPUbackprop(NeuralNetwork& nn, const arma::mat& y, double reg,
     cudaFree(d_y);
     cudaFree(d_diff);
     cudaFree(d_W1);
+    cudaFree(d_W0);
     cudaFree(d_W1T);
     cudaFree(d_db1);
     cudaFree(d_da1);
@@ -442,6 +457,8 @@ void GPUbackprop(NeuralNetwork& nn, const arma::mat& y, double reg,
     cudaFree(d_dz1);
     cudaFree(d_db0);
     cudaFree(d_a0T);
+    cudaFree(d_X);
+    cudaFree(d_XT);
 }
 
 /*
