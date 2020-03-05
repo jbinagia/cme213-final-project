@@ -346,7 +346,9 @@ void GPUbackprop(NeuralNetwork& nn, const arma::mat& y, double reg,
     double* d_W1T;
     double* d_db1;
     double *d_da1;
-    double *d_da1prod;
+    double *d_dz1_term1;
+    double *d_dz1_term2;
+    double *d_dz1;
     double *d_a0;
     double* d_a0T;
     cudaMalloc((void**)&d_yc, sizeof(double) * M * N);
@@ -356,7 +358,9 @@ void GPUbackprop(NeuralNetwork& nn, const arma::mat& y, double reg,
     cudaMalloc((void **)&d_W1T, sizeof(double) * nn.W[1].n_cols * nn.W[1].n_rows);
     cudaMalloc((void **)&d_db1, sizeof(double) * M * 1);
     cudaMalloc((void **)&d_da1, sizeof(double) * nn.W[1].n_cols * N);
-    cudaMalloc((void **)&d_da1prod, sizeof(double) * nn.W[1].n_cols * N);
+    cudaMalloc((void **)&d_dz1_term1, sizeof(double) * nn.W[1].n_cols * N);
+    cudaMalloc((void **)&d_dz1_term2, sizeof(double) * nn.W[1].n_cols * N);
+    cudaMalloc((void **)&d_dz1, sizeof(double) * nn.W[1].n_cols * N);
     cudaMalloc((void **)&d_a0, sizeof(double) * bpcache.a[0].n_rows * bpcache.a[0].n_cols);
     cudaMalloc((void **)&d_a0T, sizeof(double) * bpcache.a[0].n_cols * bpcache.a[0].n_rows);
     cudaMemcpy(d_yc, bpcache.yc.memptr(), sizeof(double) * M * N, cudaMemcpyHostToDevice);
@@ -394,18 +398,16 @@ void GPUbackprop(NeuralNetwork& nn, const arma::mat& y, double reg,
     GPUtranspose(d_W1, d_W1T, nn.W[1].n_rows, nn.W[1].n_cols);
 
     // compute da1
-    // arma::mat da1;
-    // da1.set_size(nn.W[1].n_cols, N);
     double beta = 0.0;
     myGEMM(d_W1T, d_diff, d_da1, &alpha, &beta, nn.W[1].n_cols, N, nn.W[1].n_rows); 
-    // cudaMemcpy(da1.memptr(), d_da1, sizeof(double) * nn.W[1].n_cols * N, cudaMemcpyDeviceToHost);
 
-    // element-wise product between da1 and a0
-    arma::mat da1prod;
-    da1prod.set_size(nn.W[1].n_cols, N);
-    GPUelemwise(d_da1, d_a0, d_da1prod, nn.W[1].n_cols, N);
-    cudaMemcpy(da1prod.memptr(), d_da1prod, sizeof(double) * nn.W[1].n_cols * N, cudaMemcpyDeviceToHost);
-    arma::mat dz1 = da1prod % (1 - bpcache.a[0]); // % denotes Schur product: element-wise multiplication of two objects
+    // now calculate dz1
+    GPUelemwise(d_da1, d_a0, d_dz1_term1, nn.W[1].n_cols, N);
+    GPUelemwise(d_dz1_term1, d_a0, d_dz1_term2, nn.W[1].n_cols, N);
+    GPUaddition(d_dz1_term1, d_dz1_term2, d_dz1, 1.0, -1.0, nn.W[1].n_cols, N);
+    arma::mat dz1;
+    dz1.set_size(nn.W[1].n_cols, N);
+    cudaMemcpy(dz1.memptr(), d_dz1, sizeof(double) * nn.W[1].n_cols * N, cudaMemcpyDeviceToHost);
 
     // TODO for backprop:
     // arma::mat diff = (1.0 / N) * (bpcache.yc - y);
@@ -425,7 +427,9 @@ void GPUbackprop(NeuralNetwork& nn, const arma::mat& y, double reg,
     cudaFree(d_W1T);
     cudaFree(d_db1);
     cudaFree(d_da1);
-    cudaFree(d_da1prod);
+    cudaFree(d_dz1_term1);
+    cudaFree(d_dz1_term2);
+    cudaFree(d_dz1);
     cudaFree(d_a0T);
 }
 
