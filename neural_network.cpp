@@ -338,19 +338,23 @@ void GPUbackprop(NeuralNetwork& nn, const arma::mat& y, double reg,
     int M = y.n_rows; 
     int N = y.n_cols;
 
-    // CUDA declarations and allocations
+    // CUDA declarations, allocations, memcpy to device
     double* d_yc;
     double* d_y;
     double* d_diff; 
     double* d_W1;
+    double* d_W1T;
     double* d_db1;
+    double *d_da1;
     double *d_a0;
     double* d_a0T;
     cudaMalloc((void**)&d_yc, sizeof(double) * M * N);
     cudaMalloc((void**)&d_y, sizeof(double) * M * N);
     cudaMalloc((void**)&d_diff, sizeof(double) * M * N);
     cudaMalloc((void **)&d_W1, sizeof(double) * nn.W[1].n_rows * nn.W[1].n_cols);
+    cudaMalloc((void **)&d_W1T, sizeof(double) * nn.W[1].n_cols * nn.W[1].n_rows);
     cudaMalloc((void **)&d_db1, sizeof(double) * M * 1);
+    cudaMalloc((void **)&d_da1, sizeof(double) * nn.W[1].n_cols * N);
     cudaMalloc((void **)&d_a0, sizeof(double) * bpcache.a[0].n_rows * bpcache.a[0].n_cols);
     cudaMalloc((void **)&d_a0T, sizeof(double) * bpcache.a[0].n_cols * bpcache.a[0].n_rows);
     cudaMemcpy(d_yc, bpcache.yc.memptr(), sizeof(double) * M * N, cudaMemcpyHostToDevice);
@@ -361,8 +365,6 @@ void GPUbackprop(NeuralNetwork& nn, const arma::mat& y, double reg,
     GPUaddition(d_yc, d_y, d_diff, 1.0 / N, -1.0 / N, M, N);
 
     // calculate gradients
-    // arma::mat a0T = bpcache.a[0].t();                                                                                    // TODO: replace with GPU transpose. size is 800 x 100
-    // cudaMemcpy(d_a0T, a0T.memptr(), sizeof(double) * bpcache.a[0].n_cols * bpcache.a[0].n_rows, cudaMemcpyHostToDevice); // correct amount of memory being allocated
     cudaMemcpy(d_a0, bpcache.a[0].memptr(), sizeof(double) * bpcache.a[0].n_rows * bpcache.a[0].n_cols, cudaMemcpyHostToDevice);
     GPUtranspose(d_a0, d_a0T, bpcache.a[0].n_rows, bpcache.a[0].n_cols);
 
@@ -386,12 +388,22 @@ void GPUbackprop(NeuralNetwork& nn, const arma::mat& y, double reg,
     bpgrads.db[1] = db1;
 
     // calculate transpose of nn.W[1] to calculate da1 
+    cudaMemcpy(d_W1, nn.W[1].memptr(), sizeof(double) * nn.W[1].n_rows * nn.W[1].n_cols, cudaMemcpyHostToDevice); // TODO: optimize this later. only needed since we overwrote d_W1
+    GPUtranspose(d_W1, d_W1T, nn.W[1].n_rows, nn.W[1].n_cols);
+
+    // compute da1
+    arma::mat da1;
+    da1.set_size(nn.W[1].n_cols, N);
+    double beta = 0.0;
+    myGEMM(d_W1T, d_diff, d_da1, &alpha, &beta, nn.W[1].n_cols, N, nn.W[1].n_rows); 
+    cudaMemcpy(da1.memptr(), d_da1, sizeof(double) * nn.W[1].n_cols * N, cudaMemcpyDeviceToHost);
+
 
     // TODO for backprop:
     // arma::mat diff = (1.0 / N) * (bpcache.yc - y);
     // bpgrads.dW[1] = diff * bpcache.a[0].t() + reg * nn.W[1];
     // bpgrads.db[1] = arma::sum(diff, 1); // returns sum of elements in each row (result is a column vector)
-    arma::mat da1 = nn.W[1].t() * diff;
+    // arma::mat da1 = nn.W[1].t() * diff;
 
     arma::mat dz1 = da1 % bpcache.a[0] % (1 - bpcache.a[0]); // % denotes Schur product: element-wise multiplication of two objects
 
@@ -403,7 +415,9 @@ void GPUbackprop(NeuralNetwork& nn, const arma::mat& y, double reg,
     cudaFree(d_y);
     cudaFree(d_diff);
     cudaFree(d_W1);
+    cudaFree(d_W1T);
     cudaFree(d_db1);
+    cudaFree(d_da1);
     cudaFree(d_a0T);
 }
 
