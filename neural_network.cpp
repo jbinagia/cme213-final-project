@@ -380,23 +380,18 @@ void GPUbackprop(NeuralNetwork& nn, const arma::mat& y, double reg,
     // yc - y
     GPUaddition(d_yc, d_y, d_diff, 1.0 / N, -1.0 / N, M, N);
 
-    // calculate gradients
+    // start calculating gradients
     cudaMemcpy(d_a0, bpcache.a[0].memptr(), sizeof(double) * bpcache.a[0].n_rows * bpcache.a[0].n_cols, cudaMemcpyHostToDevice);
     GPUtranspose(d_a0, d_a0T, bpcache.a[0].n_rows, bpcache.a[0].n_cols);
-
     double alpha = 1.0;
-    myGEMM(d_diff, d_a0T, d_W1, &alpha, &reg, nn.W[1].n_rows, nn.W[1].n_cols, N); // M, N, and K are 10, 100, 800
+    myGEMM(d_diff, d_a0T, d_W1, &alpha, &reg, nn.W[1].n_rows, nn.W[1].n_cols, N); 
     // at this point d_W1 holds the result of diff * bpcache.a[0].t() + reg * nn.W[1] which should be assigned to bpgrads.dW[1] 
-
     arma::mat dW1;
     dW1.set_size(nn.W[1].n_rows, nn.W[1].n_cols);
     cudaMemcpy(dW1.memptr(), d_W1, sizeof(double) * dW1.n_rows * dW1.n_cols, cudaMemcpyDeviceToHost);
     bpgrads.dW[1] = dW1;
 
-    arma::mat diff;
-    diff.set_size(M, N);
-    cudaMemcpy(diff.memptr(), d_diff, sizeof(double) * M * N, cudaMemcpyDeviceToHost); // TODO: eventually this chunk can be deleted since don't need diff on host
-
+    // calculate db1 
     arma::mat db1; 
     db1.set_size(M, 1);
     GPUsum(d_diff, d_db1, M, N, 1);
@@ -415,9 +410,6 @@ void GPUbackprop(NeuralNetwork& nn, const arma::mat& y, double reg,
     GPUelemwise(d_da1, d_a0, d_dz1_term1, nn.W[1].n_cols, N);
     GPUelemwise(d_dz1_term1, d_a0, d_dz1_term2, nn.W[1].n_cols, N);
     GPUaddition(d_dz1_term1, d_dz1_term2, d_dz1, 1.0, -1.0, nn.W[1].n_cols, N);
-    arma::mat dz1;
-    dz1.set_size(nn.W[1].n_cols, N);
-    cudaMemcpy(dz1.memptr(), d_dz1, sizeof(double) * nn.W[1].n_cols * N, cudaMemcpyDeviceToHost);
 
     // calculate dw0
     arma::mat dW0;
@@ -434,15 +426,6 @@ void GPUbackprop(NeuralNetwork& nn, const arma::mat& y, double reg,
     cudaMemcpy(db0.memptr(), d_db0, sizeof(double) * nn.W[1].n_cols * 1, cudaMemcpyDeviceToHost);
     bpgrads.db[0] = db0;
 
-    // TODO for backprop:
-    // arma::mat diff = (1.0 / N) * (bpcache.yc - y);
-    // bpgrads.dW[1] = diff * bpcache.a[0].t() + reg * nn.W[1];
-    // bpgrads.db[1] = arma::sum(diff, 1); // returns sum of elements in each row (result is a column vector)
-    // arma::mat da1 = nn.W[1].t() * diff;
-    // arma::mat dz1 = da1 % bpcache.a[0] % (1 - bpcache.a[0]); // % denotes Schur product: element-wise multiplication of two objects
-    // bpgrads.dW[0] = dz1 * bpcache.X.t() + reg * nn.W[0];
-    // bpgrads.db[0] = arma::sum(dz1, 1);
-
     // Cuda deallocation 
     cudaFree(d_yc);
     cudaFree(d_y);
@@ -456,6 +439,7 @@ void GPUbackprop(NeuralNetwork& nn, const arma::mat& y, double reg,
     cudaFree(d_dz1_term2);
     cudaFree(d_dz1);
     cudaFree(d_db0);
+    cudaFree(d_a0); 
     cudaFree(d_a0T);
     cudaFree(d_X);
     cudaFree(d_XT);
