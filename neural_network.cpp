@@ -521,14 +521,29 @@ void parallel_train(NeuralNetwork& nn, const arma::mat& X, const arma::mat& y,
             cudaMemcpy(d_dW2, bpgrads.dW[2].memptr(), sizeof(double) * nn.W[2].n_rows * nn.W[2].n_cols, cudaMemcpyHostToDevice);
 
             // Gradient descent step
-            for(int i = 1; i < nn.W.size(); ++i) {
-                nn.W[i] -= learning_rate * bpgrads.dW[i];
-            }
+            // for(int i = 2; i < nn.W.size(); ++i) {
+            //     nn.W[i] -= learning_rate * bpgrads.dW[i];
+            // }
+            // Gradient descent - W0 
             GPUaddition(d_W0, d_dW0, d_W0, 1.0, -learning_rate, nn.W[0].n_rows, nn.W[0].n_cols);
             arma::mat W0;
             W0.set_size(nn.W[0].n_rows, nn.W[0].n_cols);
             cudaMemcpy(W0.memptr(), d_W0, sizeof(double) * nn.W[0].n_rows * nn.W[0].n_cols, cudaMemcpyDeviceToHost);
-            nn.W[0] = W0; 
+            nn.W[0] = W0;
+
+            // Gradient descent - W1
+            GPUaddition(d_W1, d_dW1, d_W1, 1.0, -learning_rate, nn.W[1].n_rows, nn.W[1].n_cols);
+            arma::mat W1;
+            W1.set_size(nn.W[1].n_rows, nn.W[1].n_cols);
+            cudaMemcpy(W1.memptr(), d_W1, sizeof(double) * nn.W[1].n_rows * nn.W[1].n_cols, cudaMemcpyDeviceToHost);
+            nn.W[1] = W1;
+
+            // Gradient descent - W2
+            GPUaddition(d_W2, d_dW2, d_W2, 1.0, -learning_rate, nn.W[2].n_rows, nn.W[2].n_cols);
+            arma::mat W2;
+            W2.set_size(nn.W[2].n_rows, nn.W[2].n_cols);
+            cudaMemcpy(W2.memptr(), d_W2, sizeof(double) * nn.W[2].n_rows * nn.W[2].n_cols, cudaMemcpyDeviceToHost);
+            nn.W[2] = W2;
 
             // std::cout << nn.b.size() << ", " << nn.W.size() << std::endl; // both are 2 
             // so need to allocate memory for b0, b1, b2, db0, db1, db2 and ditto for w
