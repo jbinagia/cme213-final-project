@@ -132,6 +132,17 @@ void addmat(double* mat1, double* mat2, double* output_mat, double alpha, double
     }
 }
 
+__global__
+void transpose(double* mat, double* output_mat, int M, int N) {
+
+    uint i = (blockIdx.y * blockDim.y) + threadIdx.y; // let this correspond to row index
+    uint j = (blockIdx.x * blockDim.x) + threadIdx.x; // let this correspond to column index 
+
+    if (i < M && j < N){ 
+        output_mat[i*N+j] = mat[j*M + i]; // suppose we want to access i = 3, j = 4. then this is element 4*M+i. 
+    }
+}
+
 /*
 Routine to perform an in-place GEMM operation, i.e., C := alpha*A*B + beta*C
 */
@@ -272,5 +283,16 @@ void GPUsum(double* mat, double* output_vec, int M, int N, int dim) {
     dim3 numBlocks(num_blocks);
 
     sum<<<numBlocks, threadsPerBlock>>>(mat, output_vec, M, N, dim);
+}
+
+// compute transpose of M x N matrix on GPU 
+void GPUtranspose(double* __restrict__ mat, double* __restrict__ output_mat, int M, int N) {
+
+    dim3 threadsPerBlock(8, 32);  // 256 threads
+    int num_blocks_x = (N + threadsPerBlock.x - 1)/threadsPerBlock.x; // N is number of columns
+    int num_blocks_y = (M + threadsPerBlock.y - 1)/threadsPerBlock.y; // M is number of rows
+    dim3 numBlocks(num_blocks_x, num_blocks_y); 
+
+    transpose<<<numBlocks, threadsPerBlock>>>(mat, output_mat, M, N); 
 }
 

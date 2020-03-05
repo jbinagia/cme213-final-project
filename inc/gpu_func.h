@@ -63,6 +63,8 @@ void GPUaddition(double* mat, double* mat2, double* output_mat, double alpha, do
 
 void GPUsum(double* mat, double* output_vec, int M, int N, int dim);
 
+void GPUtranspose(double* mat, double* output_mat, int M, int N);
+
 __global__
 void sigmoidKernel(double* mat1, double* mat2, int M, int N);
 
