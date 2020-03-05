@@ -109,25 +109,13 @@ void repmat(double* mat1, double* mat2, int M, int N) {
 }
 
 __global__
-void addmat(double* mat1, double* mat2, double* output_mat, int M, int N) {
+void addmat(double* mat1, double* mat2, double* output_mat, double alpha, double beta, int M, int N) {
 
     uint i = (blockIdx.y * blockDim.y) + threadIdx.y; // let this correspond to row index
     uint j = (blockIdx.x * blockDim.x) + threadIdx.x; // let this correspond to column index 
 
     if (i < M && j < N){ 
-        output_mat[j*M + i] = mat1[j*M+i] + mat2[j*M+i]; 
-    }
-}
-// TODO: implement this as an in-place operation 
-
-__global__
-void scalar_mult(double scalar, double* mat, int M, int N) {
-
-    uint i = (blockIdx.y * blockDim.y) + threadIdx.y; // let this correspond to row index
-    uint j = (blockIdx.x * blockDim.x) + threadIdx.x; // let this correspond to column index 
-
-    if (i < M && j < N){ 
-        mat[j*M + i] = scalar*mat[j*M + i]; 
+        output_mat[j*M + i] = alpha*mat1[j*M+i] + beta*mat2[j*M+i]; 
     }
 }
 
@@ -250,25 +238,16 @@ void GPUsoftmax(double* mat, double* mat2, int M, int N) {
     // mat2 = exp_mat / repmat(sum_exp_mat, mat.n_rows, 1); // Element-wise division of an object by another object or a scalar
 }
 
-void GPUaddition(double* mat, double* mat2, double* output_mat, int M, int N) {
+// operations of the form alpha*A + beta*B
+    // e.g. alpha = beta = 1 is simply addition while alpha = 1, beta = -1 is subtraction.
+    // or alpha = constant, beta = 0 is multiply scalar by a constant. 
+void GPUaddition(double* mat, double* mat2, double* output_mat, double alpha, double beta, int M, int N) {
 
     dim3 threadsPerBlock(8, 32);  // 256 threads
     int num_blocks_x = (N + threadsPerBlock.x - 1)/threadsPerBlock.x; // N is number of columns
     int num_blocks_y = (M + threadsPerBlock.y - 1)/threadsPerBlock.y; // M is number of rows
     dim3 numBlocks(num_blocks_x, num_blocks_y); 
 
-    // calculate exponential of each element
-    addmat<<<numBlocks, threadsPerBlock>>>(mat, mat2, output_mat, M, N); 
-}
-
-void GPUscalar_mult(double scalar, double* mat, int M, int N) {
-
-    dim3 threadsPerBlock(8, 32);  // 256 threads
-    int num_blocks_x = (N + threadsPerBlock.x - 1)/threadsPerBlock.x; // N is number of columns
-    int num_blocks_y = (M + threadsPerBlock.y - 1)/threadsPerBlock.y; // M is number of rows
-    dim3 numBlocks(num_blocks_x, num_blocks_y); 
-
-    // calculate exponential of each element
-    scalar_mult<<<numBlocks, threadsPerBlock>>>(scalar, mat, M, N); 
+    addmat<<<numBlocks, threadsPerBlock>>>(mat, mat2, output_mat, alpha, beta, M, N); 
 }
 
