@@ -65,6 +65,8 @@ void GPUsum(double* mat, double* output_vec, int M, int N, int dim);
 
 void GPUtranspose(double* mat, double* output_mat, int M, int N);
 
+void GPUelemwise(double* mat1, double* mat2, double* output_mat, int M, int N);
+
 __global__
 void sigmoidKernel(double* mat1, double* mat2, int M, int N);
 
@@ -83,5 +85,10 @@ void repmat(double* mat1, double* mat2, int M, int N);
 __global__
 void addmat(double* mat1, double* mat2, double* output_mat, int M, int N);
 
+__global__
+void transpose(double* mat, double* output_mat, int M, int N);
+
+__global__ 
+void elemwise(double *mat1, double *mat2, double *output_mat, int M, int N);
 
 #endif
