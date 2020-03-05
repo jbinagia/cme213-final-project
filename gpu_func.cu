@@ -85,14 +85,27 @@ void softmaxKernel(double* mat1, double* mat2, int M, int N) {
 }
 
 __global__
-void sumcols(double* mat1, double* mat2, int M, int N) {
-
-    uint j = (blockIdx.x * blockDim.x) + threadIdx.x; // let this correspond to column index 
-    if (j < N){ 
-        mat2[j] = 0.0; 
-        for (int i = 0; i < M; i++){
-                mat2[j] += mat1[j*M + i]; 
+void sum(double* mat1, double* mat2, int M, int N, int dim) {
+    // dim = 0: calc sum for each column 
+    // dim = 1: calc sum for each row
+    if (dim == 0){
+        uint j = (blockIdx.x * blockDim.x) + threadIdx.x; // let this correspond to column index 
+        if (j < N){ 
+            mat2[j] = 0.0; 
+            for (int i = 0; i < M; i++){
+                    mat2[j] += mat1[j*M + i]; 
+            }
         }
+    }else if(dim == 1){
+        uint i = (blockIdx.x * blockDim.x) + threadIdx.x; // let this correspond to column index 
+        if (i < M){ 
+            mat2[i] = 0.0; 
+            for (int j = 0; j < N; j++){
+                    mat2[i] += mat1[j*M + i]; 
+            }
+        }
+    }else{
+        printf("Error: dim must be 0 or 1 in sum kernel");
     }
 }
 
@@ -213,7 +226,7 @@ void GPUsoftmax(double* mat, double* mat2, int M, int N) {
     dim3 threadsPerBlock2(256);
     num_blocks_x = (N + threadsPerBlock2.x - 1)/threadsPerBlock2.x; // N is number of columns
     dim3 numBlocks2(num_blocks_x);
-    sumcols<<<numBlocks2, threadsPerBlock2>>>(mat2, d_sum_exp_mat,M, N);
+    sum<<<numBlocks2, threadsPerBlock2>>>(mat2, d_sum_exp_mat, M, N, 0);
 
     // replicate this row vector into a matrix 
     double* d_denom; 
@@ -249,5 +262,15 @@ void GPUaddition(double* mat, double* mat2, double* output_mat, double alpha, do
     dim3 numBlocks(num_blocks_x, num_blocks_y); 
 
     addmat<<<numBlocks, threadsPerBlock>>>(mat, mat2, output_mat, alpha, beta, M, N); 
+}
+
+// calculates sum over rows or column of a matrix of size MxN
+void GPUsum(double* mat, double* output_vec, int M, int N, int dim) {
+
+    dim3 threadsPerBlock(256);
+    int num_blocks = (N + threadsPerBlock.x - 1)/threadsPerBlock.x; // N is number of columns
+    dim3 numBlocks(num_blocks);
+
+    sum<<<numBlocks, threadsPerBlock>>>(mat, output_vec, M, N, dim);
 }
 

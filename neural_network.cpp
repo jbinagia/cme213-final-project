@@ -374,14 +374,14 @@ void GPUbackprop(NeuralNetwork& nn, const arma::mat& y, double reg,
 
     arma::mat db1; 
     db1.set_size(M, 1);
-    cudaMemcpy(db1.memptr(), d_db1, sizeof(double) * dW1.n_rows * dW1.n_cols, cudaMemcpyDeviceToHost);
-
-
+    GPUsum(d_diff, d_db1, M, N, 1);
+    cudaMemcpy(db1.memptr(), d_db1, sizeof(double) * M * 1, cudaMemcpyDeviceToHost);
+    bpgrads.db[1] = db1; 
 
     // TODO for backprop:
     // arma::mat diff = (1.0 / N) * (bpcache.yc - y);
     // bpgrads.dW[1] = diff * bpcache.a[0].t() + reg * nn.W[1];
-    bpgrads.db[1] = arma::sum(diff, 1); // returns sum of elements in each row (result is a column vector)
+    // bpgrads.db[1] = arma::sum(diff, 1); // returns sum of elements in each row (result is a column vector)
     arma::mat da1 = nn.W[1].t() * diff;
 
     arma::mat dz1 = da1 % bpcache.a[0] % (1 - bpcache.a[0]); // % denotes Schur product: element-wise multiplication of two objects
