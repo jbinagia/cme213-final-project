@@ -349,6 +349,7 @@ void GPUbackprop(NeuralNetwork& nn, const arma::mat& y, double reg,
     double *d_dz1_term1;
     double *d_dz1_term2;
     double *d_dz1;
+    double *d_db0;
     double *d_a0;
     double* d_a0T;
     cudaMalloc((void**)&d_yc, sizeof(double) * M * N);
@@ -361,6 +362,7 @@ void GPUbackprop(NeuralNetwork& nn, const arma::mat& y, double reg,
     cudaMalloc((void **)&d_dz1_term1, sizeof(double) * nn.W[1].n_cols * N);
     cudaMalloc((void **)&d_dz1_term2, sizeof(double) * nn.W[1].n_cols * N);
     cudaMalloc((void **)&d_dz1, sizeof(double) * nn.W[1].n_cols * N);
+    cudaMalloc((void **)&d_db0, sizeof(double) * nn.W[1].n_cols * 1);
     cudaMalloc((void **)&d_a0, sizeof(double) * bpcache.a[0].n_rows * bpcache.a[0].n_cols);
     cudaMalloc((void **)&d_a0T, sizeof(double) * bpcache.a[0].n_cols * bpcache.a[0].n_rows);
     cudaMemcpy(d_yc, bpcache.yc.memptr(), sizeof(double) * M * N, cudaMemcpyHostToDevice);
@@ -409,15 +411,23 @@ void GPUbackprop(NeuralNetwork& nn, const arma::mat& y, double reg,
     dz1.set_size(nn.W[1].n_cols, N);
     cudaMemcpy(dz1.memptr(), d_dz1, sizeof(double) * nn.W[1].n_cols * N, cudaMemcpyDeviceToHost);
 
+    // calculate dw0
+
+    // calculat db0
+    arma::mat db0;
+    db0.set_size(nn.W[1].n_cols, 1);
+    GPUsum(d_dz1, d_db0, nn.W[1].n_cols, N, 1);
+    cudaMemcpy(db0.memptr(), d_db0, sizeof(double) * nn.W[1].n_cols * 1, cudaMemcpyDeviceToHost);
+    bpgrads.db[0] = db0;
+
     // TODO for backprop:
     // arma::mat diff = (1.0 / N) * (bpcache.yc - y);
     // bpgrads.dW[1] = diff * bpcache.a[0].t() + reg * nn.W[1];
     // bpgrads.db[1] = arma::sum(diff, 1); // returns sum of elements in each row (result is a column vector)
     // arma::mat da1 = nn.W[1].t() * diff;
     // arma::mat dz1 = da1 % bpcache.a[0] % (1 - bpcache.a[0]); // % denotes Schur product: element-wise multiplication of two objects
-
     bpgrads.dW[0] = dz1 * bpcache.X.t() + reg * nn.W[0];
-    bpgrads.db[0] = arma::sum(dz1, 1);
+    // bpgrads.db[0] = arma::sum(dz1, 1);
 
     // Cuda deallocation 
     cudaFree(d_yc);
@@ -430,6 +440,7 @@ void GPUbackprop(NeuralNetwork& nn, const arma::mat& y, double reg,
     cudaFree(d_dz1_term1);
     cudaFree(d_dz1_term2);
     cudaFree(d_dz1);
+    cudaFree(d_db0);
     cudaFree(d_a0T);
 }
 
