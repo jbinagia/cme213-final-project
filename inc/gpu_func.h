@@ -4,7 +4,6 @@
 #include <cuda_runtime.h>
 #include <helper_cuda.h>
 #include <helper_functions.h>
-#include <armadillo>
 
 struct event_pair {
     cudaEvent_t start;
@@ -49,7 +48,7 @@ void gpuGEMM(double* A, double* B, double* C, double alpha, double beta, int M,
 int myGEMM(double* A, double* B, double* C, double* alpha, double* beta, int M,
            int N, int K);
 
-void GPUsigmoid(const arma::mat& mat, arma::mat& mat2);
+void GPUsigmoid(double* mat, double* mat2, int M, int N);
 
 void GPUsoftmax(double* mat, double* mat2, int M, int N); 
 

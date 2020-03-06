@@ -4,7 +4,6 @@
 #include <helper_functions.h>
 #include <iostream>
 #include "cublas_v2.h"
-#include <armadillo>
 #include "utils/common.h"
 
 __global__
@@ -176,34 +175,14 @@ int myGEMM(double* __restrict__ A, double* __restrict__ B,
     return 1;
 }
 
-void GPUsigmoid(const arma::mat& mat1, arma::mat& mat2) {
-
-    int M = mat1.n_rows; 
-    int N = mat1.n_cols; 
-
-    mat2.set_size(M, N);
-    ASSERT_MAT_SAME_SIZE(mat1, mat2);
+void GPUsigmoid(double* mat1, double* mat2, int M, int N) {
 
     dim3 threadsPerBlock(8, 32);  // 256 threads
     int num_blocks_x = (N + threadsPerBlock.x - 1)/threadsPerBlock.x; // N is number of columns
     int num_blocks_y = (M + threadsPerBlock.y - 1)/threadsPerBlock.y; // M is number of rows
     dim3 numBlocks(num_blocks_x, num_blocks_y); 
 
-    double* dmat1;
-    double* dmat2;
-
-    cudaMalloc((void**)&dmat1, sizeof(double) * M * N);
-    cudaMalloc((void**)&dmat2, sizeof(double) * M * N);
-
-    cudaMemcpy(dmat1, mat1.memptr(), sizeof(double) * M * N, cudaMemcpyHostToDevice);
-    cudaMemcpy(dmat2, mat2.memptr(), sizeof(double) * M * N, cudaMemcpyHostToDevice);
-
-    sigmoidKernel<<<numBlocks, threadsPerBlock>>>(dmat1, dmat2, M, N); 
-
-    cudaMemcpy(mat2.memptr(), dmat2, sizeof(double) * M * N, cudaMemcpyDeviceToHost);
-
-    cudaFree(dmat1);
-    cudaFree(dmat2);
+    sigmoidKernel<<<numBlocks, threadsPerBlock>>>(mat1, mat2, M, N); 
 }
 
 void GPUsoftmax(double* mat, double* mat2, int M, int N) {
