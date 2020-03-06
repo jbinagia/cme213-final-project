@@ -301,15 +301,20 @@ void GPUfeedforward(NeuralNetwork& nn, const arma::mat& X, struct cache& cache) 
     // CUDA declarations, allocations, memcpy to device
     double* d_z1;
     double* d_z2;
+    double *d_a1;
     double* d_a2;
-    double* d_W0; 
+    double* d_W0;
+    double *d_W1;
     double* d_X; 
     cudaMalloc((void **)&d_z1, sizeof(double) * nn.b[0].n_rows * N);
     cudaMalloc((void **)&d_z2, sizeof(double) * nn.b[1].n_rows * N);
+    cudaMalloc((void **)&d_a1, sizeof(double) * nn.b[0].n_rows * N);
     cudaMalloc((void **)&d_a2, sizeof(double) * nn.b[1].n_rows * N);
     cudaMalloc((void **)&d_W0, sizeof(double) * nn.W[0].n_rows * nn.W[0].n_cols);
+    cudaMalloc((void **)&d_W1, sizeof(double) * nn.W[1].n_rows * nn.W[1].n_cols);
     cudaMalloc((void **)&d_X, sizeof(double) * X.n_rows * X.n_cols);
     cudaMemcpy(d_W0, nn.W[0].memptr(), sizeof(double) * nn.W[0].n_rows * nn.W[0].n_cols, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_W1, nn.W[1].memptr(), sizeof(double) * nn.W[1].n_rows * nn.W[1].n_cols, cudaMemcpyHostToDevice);
     cudaMemcpy(d_X, X.memptr(), sizeof(double) * X.n_rows * X.n_cols, cudaMemcpyHostToDevice);
 
     // calculate input to sigmoid. W[i] are the weights of the i^th layer
@@ -328,8 +333,12 @@ void GPUfeedforward(NeuralNetwork& nn, const arma::mat& X, struct cache& cache) 
 
     // calculate input to sigmoid. 
     assert(a1.n_rows == nn.W[1].n_cols);
-    arma::mat z2 = arma::repmat(nn.b[1], 1, N); // initialize output. 1 copy per row, N copies per column. 
-    wrapperGEMM(nn.W[1].memptr(), a1.memptr(), z2.memptr(), &alpha, &beta, nn.W[1].n_rows, z2.n_cols, a1.n_rows); 
+    arma::mat z2 = arma::repmat(nn.b[1], 1, N); // initialize output. 1 copy per row, N copies per column.
+    cudaMemcpy(d_z2, z2.memptr(), sizeof(double) * nn.b[1].n_rows * N, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_a1, a1.memptr(), sizeof(double) * nn.b[0].n_rows * N, cudaMemcpyHostToDevice);
+    myGEMM(d_W1, d_a1, d_z2, &alpha, &beta, nn.W[1].n_rows, z2.n_cols, a1.n_rows);
+    // wrapperGEMM(nn.W[1].memptr(), a1.memptr(), z2.memptr(), &alpha, &beta, nn.W[1].n_rows, z2.n_cols, a1.n_rows);
+    cudaMemcpy(z2.memptr(), d_z2, sizeof(double) * nn.W[1].n_rows * N, cudaMemcpyDeviceToHost);
     cache.z[1] = z2;
 
     // calculate second set of activations
@@ -344,8 +353,10 @@ void GPUfeedforward(NeuralNetwork& nn, const arma::mat& X, struct cache& cache) 
     // Cuda deallocation
     cudaFree(d_z1);
     cudaFree(d_z2);
+    cudaFree(d_a1);
     cudaFree(d_a2);
     cudaFree(d_W0);
+    cudaFree(d_W1);
     cudaFree(d_X);
 }
 

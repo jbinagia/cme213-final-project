@@ -49,17 +49,11 @@ void gpuGEMM(double* A, double* B, double* C, double alpha, double beta, int M,
 int myGEMM(double* A, double* B, double* C, double* alpha, double* beta, int M,
            int N, int K);
 
-int wrapperGEMM(double* A, double* B, double* C, double* alpha, double* beta, int M,
-           int N, int K);
-// TODO: delete wrapperGEMM
-
 void GPUsigmoid(const arma::mat& mat, arma::mat& mat2);
 
 void GPUsoftmax(double* mat, double* mat2, int M, int N); 
 
 void GPUaddition(double* mat, double* mat2, double* output_mat, double alpha, double beta, int M, int N);
-
-// void GPUscalar_mult(double scalar, double* mat, int M, int N);
 
 void GPUsum(double* mat, double* output_vec, int M, int N, int dim);
 
