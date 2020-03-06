@@ -551,11 +551,27 @@ void parallel_train(NeuralNetwork& nn, const arma::mat& X, const arma::mat& y,
             arma::mat X_batch = X.cols(batch * batch_size, last_col);
             arma::mat y_batch = y.cols(batch * batch_size, last_col);
 
+            // split up X and y or X_batch and y_batch? I think it should be the latter... (debugging)
+            // MPI_scatter X_batch and y_batch and change where they are called below 
+            // for all-reduce, we want to transfer each gradient to the host and then all reduce
+            // we only all-reduce the delta in the GD calc. so we can transfer that true delta back to each device
+            // so everyone can update the network coefficients. then send them back to the host as we do now.
+            // use memptr() to pass matrices as double* and use MPI::DOUBLE data type. 
+            // all MPI date types: https: //stanford-cme213.github.io/Lecture%20Notes/Lecture_16/Lecture_16.html#34
+
+            // Scatter input data to different processes using MPI
+            double* my_X_batch; 
+            double* my_y_batch; 
+            // MPI_Scatter(X_batch.memptr(), int send_count??, MPI_DOUBLE, my_X_batch, int recv_count??, MPI_DOUBLE, root??, MPI_COMM_WORLD);
+            // MPI_Scatter(y_batch.memptr(), int send_count??, MPI_DOUBLE, my_y_batch, int recv_count??, MPI_DOUBLE, root??, MPI_COMM_WORLD);
+            // need to use scatter_v to handle uneven processor count (e.g. num_processors = 3)
+
+            // forward and backward pass
             struct cache bpcache;
-            GPUfeedforward(nn, X_batch, bpcache); // implement gpu version 
+            GPUfeedforward(nn, X_batch, bpcache); 
 
             struct grads bpgrads;
-            GPUbackprop(nn, y_batch, reg, bpcache, bpgrads); // implement gpu version 
+            GPUbackprop(nn, y_batch, reg, bpcache, bpgrads); 
 
             // transfer bpgrads to gpu
             cudaMemcpy(d_dW0, bpgrads.dW[0].memptr(), sizeof(double) * nn.W[0].n_rows * nn.W[0].n_cols, cudaMemcpyHostToDevice);
