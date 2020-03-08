@@ -560,18 +560,62 @@ void parallel_train(NeuralNetwork& nn, const arma::mat& X, const arma::mat& y,
             // all MPI date types: https: //stanford-cme213.github.io/Lecture%20Notes/Lecture_16/Lecture_16.html#34
 
             // Scatter input data to different processes using MPI
-            double* my_X_batch; 
-            double* my_y_batch; 
-            // MPI_Scatter(X_batch.memptr(), int send_count??, MPI_DOUBLE, my_X_batch, int recv_count??, MPI_DOUBLE, root??, MPI_COMM_WORLD);
-            // MPI_Scatter(y_batch.memptr(), int send_count??, MPI_DOUBLE, my_y_batch, int recv_count??, MPI_DOUBLE, root??, MPI_COMM_WORLD);
-            // need to use scatter_v to handle uneven processor count (e.g. num_processors = 3)
+            // int num_procs2 = 3; // for debugging 
+            assert(X_batch.n_cols == y_batch.n_cols);
+            // assert(X_batch.n_rows == y_batch.n_rows); // this is not true 
+            int local_size = X_batch.n_cols / num_procs; // approximate number of columns to send to each process (floor)
+
+            // if (rank==0){
+            int *displs_x = new int[num_procs];
+            int *displs_y = new int[num_procs];
+            int *counts_x = new int[num_procs];
+            int *counts_y = new int[num_procs];
+            // std::cout << "X_batch.n_cols, num_procs, local_size: " << X_batch.n_cols << ", " << num_procs << ", " << local_size << std::endl; 
+        
+
+            for (int i = 0; i < num_procs; i++)
+            {
+                displs_x[i] = X_batch.n_rows*local_size*i;
+                displs_y[i] = y_batch.n_rows * local_size * i;
+                if (X_batch.n_cols%num_procs != 0 && i == num_procs - 1){ // if the last process needs to be assigned a few extra columns
+                    counts_x[i] = X_batch.n_rows * (X_batch.n_cols - local_size * i);
+                    counts_y[i] = y_batch.n_rows * (X_batch.n_cols - local_size * i);
+                }else{
+                    counts_x[i] = X_batch.n_rows * local_size;
+                    counts_y[i] = y_batch.n_rows * local_size;
+                }
+                // std::cout << "X_batch.n_cols, counts[i] and displs[i] are:: " << X_batch.n_cols << ", " << counts[i] / X_batch.n_rows << ", " << displs[i] / X_batch.n_rows << std::endl;
+            }
+            // }
+
+            // calc how many elements I expect to receive
+            int recv_count_x;
+            int recv_count_y;
+            if (rank==num_procs-1){ // if I'm the last process (who will receive a few extra columns)
+                recv_count_x = X_batch.n_rows * (X_batch.n_cols - local_size * rank);
+                recv_count_y = y_batch.n_rows * (X_batch.n_cols - local_size * rank);
+            }else{
+                recv_count_x = X_batch.n_rows * local_size;
+                recv_count_y = y_batch.n_rows * local_size;
+            }
+            arma::mat my_X_batch;
+            my_X_batch.set_size(X_batch.n_rows, recv_count_x/X_batch.n_rows);
+            arma::mat my_y_batch;
+            my_y_batch.set_size(y_batch.n_rows, recv_count_y/y_batch.n_rows);
+            // std::cout << "I expect to receive " << recv_count / X_batch.n_rows << " elements on rank " << rank << std::endl;
+
+            // rank = 0 scatter to other processes. Use scatter_v to handle when the number of processes does not divide evently into total number of columns. 
+            MPI_Scatterv(X_batch.memptr(), counts_x, displs_x, MPI_DOUBLE, my_X_batch.memptr(), recv_count_x, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+            MPI_Scatterv(y_batch.memptr(), counts_y, displs_y, MPI_DOUBLE, my_y_batch.memptr(), recv_count_y, MPI_DOUBLE, 0, MPI_COMM_WORLD);
 
             // forward and backward pass
             struct cache bpcache;
-            GPUfeedforward(nn, X_batch, bpcache); 
+            GPUfeedforward(nn, my_X_batch, bpcache); 
+            // std::cout << "hi made it to here1" << std::endl; 
 
             struct grads bpgrads;
-            GPUbackprop(nn, y_batch, reg, bpcache, bpgrads); 
+            GPUbackprop(nn, my_y_batch, reg, bpcache, bpgrads);
+            // std::cout << "hi made it to here2" << std::endl;
 
             // transfer bpgrads to gpu
             cudaMemcpy(d_dW0, bpgrads.dW[0].memptr(), sizeof(double) * nn.W[0].n_rows * nn.W[0].n_cols, cudaMemcpyHostToDevice);
