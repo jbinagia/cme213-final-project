@@ -327,8 +327,7 @@ void GPUfeedforward(NeuralNetwork& nn, const arma::mat& X, struct cache& cache) 
     cache.z[0] = z1;
 
     // calculate first set of activations
-    arma::mat a1;
-    a1.set_size(nn.W[0].n_rows, N);
+    arma::mat a1(nn.W[0].n_rows, N);
     GPUsigmoid(d_z1, d_a1, nn.W[0].n_rows, N);
     cudaMemcpy(a1.memptr(), d_a1, sizeof(double) * nn.W[0].n_rows * N, cudaMemcpyDeviceToHost);
     cache.a[0] = a1;
@@ -342,8 +341,7 @@ void GPUfeedforward(NeuralNetwork& nn, const arma::mat& X, struct cache& cache) 
     cache.z[1] = z2;
 
     // calculate second set of activations
-    arma::mat a2;
-    a2.set_size(z2.n_rows, z2.n_cols);
+    arma::mat a2(z2.n_rows, z2.n_cols);
     GPUsoftmax(d_z2, d_a2, a2.n_rows, a2.n_cols);
     cudaMemcpy(a2.memptr(), d_a2, sizeof(double) * a2.n_rows * a2.n_cols, cudaMemcpyDeviceToHost);
     cache.a[1] = cache.yc = a2;
@@ -413,14 +411,12 @@ void GPUbackprop(NeuralNetwork& nn, const arma::mat& y, double reg,
     double alpha = 1.0;
     myGEMM(d_diff, d_a0T, d_W1, &alpha, &reg, nn.W[1].n_rows, nn.W[1].n_cols, N); 
     // at this point d_W1 holds the result of diff * bpcache.a[0].t() + reg * nn.W[1] which should be assigned to bpgrads.dW[1] 
-    arma::mat dW1;
-    dW1.set_size(nn.W[1].n_rows, nn.W[1].n_cols);
+    arma::mat dW1(nn.W[1].n_rows, nn.W[1].n_cols);
     cudaMemcpy(dW1.memptr(), d_W1, sizeof(double) * dW1.n_rows * dW1.n_cols, cudaMemcpyDeviceToHost);
     bpgrads.dW[1] = dW1;
 
     // calculate db1 
-    arma::mat db1; 
-    db1.set_size(M, 1);
+    arma::mat db1(M, 1);
     GPUsum(d_diff, d_db1, M, N, 1);
     cudaMemcpy(db1.memptr(), d_db1, sizeof(double) * M * 1, cudaMemcpyDeviceToHost);
     bpgrads.db[1] = db1;
@@ -439,16 +435,14 @@ void GPUbackprop(NeuralNetwork& nn, const arma::mat& y, double reg,
     GPUaddition(d_dz1_term1, d_dz1_term2, d_dz1, 1.0, -1.0, nn.W[1].n_cols, N);
 
     // calculate dw0
-    arma::mat dW0;
-    dW0.set_size(nn.W[0].n_rows, nn.W[0].n_cols);
+    arma::mat dW0(nn.W[0].n_rows, nn.W[0].n_cols);
     GPUtranspose(d_X, d_XT, bpcache.X.n_rows, bpcache.X.n_cols);
     myGEMM(d_dz1, d_XT, d_W0, &alpha, &reg, nn.W[0].n_rows, nn.W[0].n_cols, N);
     cudaMemcpy(dW0.memptr(), d_W0, sizeof(double) * nn.W[0].n_rows * nn.W[0].n_cols, cudaMemcpyDeviceToHost);
     bpgrads.dW[0] = dW0;
 
     // calculat db0
-    arma::mat db0;
-    db0.set_size(nn.W[1].n_cols, 1);
+    arma::mat db0(nn.W[1].n_cols, 1);
     GPUsum(d_dz1, d_db0, nn.W[1].n_cols, N, 1);
     cudaMemcpy(db0.memptr(), d_db0, sizeof(double) * nn.W[1].n_cols * 1, cudaMemcpyDeviceToHost);
     bpgrads.db[0] = db0;
@@ -551,13 +545,11 @@ void parallel_train(NeuralNetwork& nn, const arma::mat& X, const arma::mat& y,
             arma::mat X_batch = X.cols(batch * batch_size, last_col);
             arma::mat y_batch = y.cols(batch * batch_size, last_col);
 
-            // split up X and y or X_batch and y_batch? I think it should be the latter... (debugging)
-            // MPI_scatter X_batch and y_batch and change where they are called below 
+
+            // TODO
             // for all-reduce, we want to transfer each gradient to the host and then all reduce
             // we only all-reduce the delta in the GD calc. so we can transfer that true delta back to each device
             // so everyone can update the network coefficients. then send them back to the host as we do now.
-            // use memptr() to pass matrices as double* and use MPI::DOUBLE data type. 
-            // all MPI date types: https: //stanford-cme213.github.io/Lecture%20Notes/Lecture_16/Lecture_16.html#34
 
             // Scatter input data to different processes using MPI
             // int num_procs2 = 3; // for debugging 
@@ -598,10 +590,8 @@ void parallel_train(NeuralNetwork& nn, const arma::mat& X, const arma::mat& y,
                 recv_count_x = X_batch.n_rows * local_size;
                 recv_count_y = y_batch.n_rows * local_size;
             }
-            arma::mat my_X_batch;
-            my_X_batch.set_size(X_batch.n_rows, recv_count_x/X_batch.n_rows);
-            arma::mat my_y_batch;
-            my_y_batch.set_size(y_batch.n_rows, recv_count_y/y_batch.n_rows);
+            arma::mat my_X_batch(X_batch.n_rows, recv_count_x / X_batch.n_rows);
+            arma::mat my_y_batch(y_batch.n_rows, recv_count_y / y_batch.n_rows);
             // std::cout << "I expect to receive " << recv_count / X_batch.n_rows << " elements on rank " << rank << std::endl;
 
             // rank = 0 scatter to other processes. Use scatter_v to handle when the number of processes does not divide evently into total number of columns. 
@@ -617,53 +607,61 @@ void parallel_train(NeuralNetwork& nn, const arma::mat& X, const arma::mat& y,
             GPUbackprop(nn, my_y_batch, reg, bpcache, bpgrads);
             // std::cout << "hi made it to here2" << std::endl;
 
-            // transfer bpgrads to gpu
+            // MPI all reduce local bpgrads
+            // MPI_Allreduce(bpgrads.dW[0].memptr(), dW0, bpgrads.dW[0].n_rows * bpgrads.dW[0].n_cols, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+            // MPI_Allreduce(bpgrads.dW[1].memptr(), dW1, bpgrads.dW[1].n_rows * bpgrads.dW[1].n_cols, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+            // MPI_Allreduce(bpgrads.dW[2].memptr(), dW2, bpgrads.dW[2].n_rows * bpgrads.dW[2].n_cols, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+            // MPI_Allreduce(bpgrads.db[0].memptr(), db0, bpgrads.db[0].n_rows * bpgrads.db[0].n_cols, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+            // MPI_Allreduce(bpgrads.db[1].memptr(), db1, bpgrads.db[1].n_rows * bpgrads.db[1].n_cols, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+            // MPI_Allreduce(bpgrads.db[2].memptr(), db2, bpgrads.db[2].n_rows * bpgrads.db[2].n_cols, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+
+            // transfer reduced bpgrads to each gpu
             cudaMemcpy(d_dW0, bpgrads.dW[0].memptr(), sizeof(double) * nn.W[0].n_rows * nn.W[0].n_cols, cudaMemcpyHostToDevice);
             cudaMemcpy(d_dW1, bpgrads.dW[1].memptr(), sizeof(double) * nn.W[1].n_rows * nn.W[1].n_cols, cudaMemcpyHostToDevice);
             cudaMemcpy(d_dW2, bpgrads.dW[2].memptr(), sizeof(double) * nn.W[2].n_rows * nn.W[2].n_cols, cudaMemcpyHostToDevice);
             cudaMemcpy(d_db0, bpgrads.db[0].memptr(), sizeof(double) * nn.b[0].n_rows * nn.b[0].n_cols, cudaMemcpyHostToDevice);
             cudaMemcpy(d_db1, bpgrads.db[1].memptr(), sizeof(double) * nn.b[1].n_rows * nn.b[1].n_cols, cudaMemcpyHostToDevice);
             cudaMemcpy(d_db2, bpgrads.db[2].memptr(), sizeof(double) * nn.b[2].n_rows * nn.b[2].n_cols, cudaMemcpyHostToDevice);
+            // cudaMemcpy(d_dW0, dW0, sizeof(double) * nn.W[0].n_rows * nn.W[0].n_cols, cudaMemcpyHostToDevice);
+            // cudaMemcpy(d_dW1, dW1, sizeof(double) * nn.W[1].n_rows * nn.W[1].n_cols, cudaMemcpyHostToDevice);
+            // cudaMemcpy(d_dW2, dW2, sizeof(double) * nn.W[2].n_rows * nn.W[2].n_cols, cudaMemcpyHostToDevice);
+            // cudaMemcpy(d_db0, db0, sizeof(double) * nn.b[0].n_rows * nn.b[0].n_cols, cudaMemcpyHostToDevice);
+            // cudaMemcpy(d_db1, db1, sizeof(double) * nn.b[1].n_rows * nn.b[1].n_cols, cudaMemcpyHostToDevice);
+            // cudaMemcpy(d_db2, db2, sizeof(double) * nn.b[2].n_rows * nn.b[2].n_cols, cudaMemcpyHostToDevice);
 
             // Gradient descent - W0 
             GPUaddition(d_W0, d_dW0, d_W0, 1.0, -learning_rate, nn.W[0].n_rows, nn.W[0].n_cols);
-            arma::mat W0;
-            W0.set_size(nn.W[0].n_rows, nn.W[0].n_cols);
+            arma::mat W0(nn.W[0].n_rows, nn.W[0].n_cols);
             cudaMemcpy(W0.memptr(), d_W0, sizeof(double) * nn.W[0].n_rows * nn.W[0].n_cols, cudaMemcpyDeviceToHost);
             nn.W[0] = W0;
 
             // Gradient descent - W1
             GPUaddition(d_W1, d_dW1, d_W1, 1.0, -learning_rate, nn.W[1].n_rows, nn.W[1].n_cols);
-            arma::mat W1;
-            W1.set_size(nn.W[1].n_rows, nn.W[1].n_cols);
+            arma::mat W1(nn.W[1].n_rows, nn.W[1].n_cols);
             cudaMemcpy(W1.memptr(), d_W1, sizeof(double) * nn.W[1].n_rows * nn.W[1].n_cols, cudaMemcpyDeviceToHost);
             nn.W[1] = W1;
 
             // Gradient descent - W2
             GPUaddition(d_W2, d_dW2, d_W2, 1.0, -learning_rate, nn.W[2].n_rows, nn.W[2].n_cols);
-            arma::mat W2;
-            W2.set_size(nn.W[2].n_rows, nn.W[2].n_cols);
+            arma::mat W2(nn.W[2].n_rows, nn.W[2].n_cols);
             cudaMemcpy(W2.memptr(), d_W2, sizeof(double) * nn.W[2].n_rows * nn.W[2].n_cols, cudaMemcpyDeviceToHost);
             nn.W[2] = W2;
 
             // Gradient descent - b0
             GPUaddition(d_b0, d_db0, d_b0, 1.0, -learning_rate, nn.b[0].n_rows, nn.b[0].n_cols);
-            arma::mat b0;
-            b0.set_size(nn.b[0].n_rows, nn.b[0].n_cols);
+            arma::mat b0(nn.b[0].n_rows, nn.b[0].n_cols);
             cudaMemcpy(b0.memptr(), d_b0, sizeof(double) * nn.b[0].n_rows * nn.b[0].n_cols, cudaMemcpyDeviceToHost);
             nn.b[0] = b0;
 
             // Gradient descent - b1
             GPUaddition(d_b1, d_db1, d_b1, 1.0, -learning_rate, nn.b[1].n_rows, nn.b[1].n_cols);
-            arma::mat b1;
-            b1.set_size(nn.b[1].n_rows, nn.b[1].n_cols);
+            arma::mat b1(nn.b[1].n_rows, nn.b[1].n_cols);
             cudaMemcpy(b1.memptr(), d_b1, sizeof(double) * nn.b[1].n_rows * nn.b[1].n_cols, cudaMemcpyDeviceToHost);
             nn.b[1] = b1;
 
             // Gradient descent - b2
             GPUaddition(d_b2, d_db2, d_b2, 1.0, -learning_rate, nn.b[2].n_rows, nn.b[2].n_cols);
-            arma::mat b2;
-            b2.set_size(nn.b[2].n_rows, nn.b[2].n_cols);
+            arma::mat b2(nn.b[2].n_rows, nn.b[2].n_cols);
             cudaMemcpy(b2.memptr(), d_b2, sizeof(double) * nn.b[2].n_rows * nn.b[2].n_cols, cudaMemcpyDeviceToHost);
             nn.b[2] = b2;
 
