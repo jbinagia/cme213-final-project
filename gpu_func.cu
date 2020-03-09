@@ -207,12 +207,6 @@ void GPUsoftmax(double* mat, double* mat2, int M, int N) {
     double* d_denom; 
     cudaMalloc((void**)&d_denom, sizeof(double) * M * N);
     repmat<<<numBlocks2, threadsPerBlock2>>>(d_sum_exp_mat, d_denom, M, N); 
-    // arma::mat test;
-    // test.set_size(1, N);
-    // cudaMemcpy(test.memptr(), d_sum_exp_mat, sizeof(double) * 1 * N, cudaMemcpyDeviceToHost);
-    // arma::mat arma_denom = repmat(test, M, 1);
-    // cudaMemcpy(d_denom, arma_denom.memptr(), sizeof(double) * M * N, cudaMemcpyHostToDevice); // get same error if I do this so replicaiton seems to be okay 
-
 
     // finally calculate sigmoid 
     dim3 threadsPerBlock3(8, 32);  // 256 threads
@@ -220,10 +214,6 @@ void GPUsoftmax(double* mat, double* mat2, int M, int N) {
     num_blocks_y = (M + threadsPerBlock3.y - 1)/threadsPerBlock3.y; // M is number of rows
     dim3 numBlocks3(num_blocks_x, num_blocks_y); 
     softmaxKernel<<<numBlocks3, threadsPerBlock3>>>(d_denom, mat2, M, N); 
-
-    // arma::mat exp_mat = arma::exp(mat);
-    // arma::mat sum_exp_mat = arma::sum(exp_mat, 0); // For matrix M, return the sum of elements in each column (dim=0), or each row (dim=1)
-    // mat2 = exp_mat / repmat(sum_exp_mat, mat.n_rows, 1); // Element-wise division of an object by another object or a scalar
 }
 
 // operations of the form alpha*A + beta*B

@@ -499,34 +499,24 @@ void parallel_train(NeuralNetwork& nn, const arma::mat& X, const arma::mat& y,
     // CUDA declarations, allocations, memcpys
     double *d_W0;
     double *d_W1;
-    double *d_W2;
     double *d_dW0;
     double *d_dW1;
-    double *d_dW2;
     double *d_b0;
     double *d_b1;
-    double *d_b2;
     double *d_db0;
     double *d_db1;
-    double *d_db2;
     cudaMalloc((void **)&d_W0, sizeof(double) * nn.W[0].n_rows * nn.W[0].n_cols);
     cudaMalloc((void **)&d_W1, sizeof(double) * nn.W[1].n_rows * nn.W[1].n_cols);
-    cudaMalloc((void **)&d_W2, sizeof(double) * nn.W[2].n_rows * nn.W[2].n_cols);
     cudaMalloc((void **)&d_dW0, sizeof(double) * nn.W[0].n_rows * nn.W[0].n_cols);
     cudaMalloc((void **)&d_dW1, sizeof(double) * nn.W[1].n_rows * nn.W[1].n_cols);
-    cudaMalloc((void **)&d_dW2, sizeof(double) * nn.W[2].n_rows * nn.W[2].n_cols);
     cudaMalloc((void **)&d_b0, sizeof(double) * nn.b[0].n_rows * nn.b[0].n_cols);
     cudaMalloc((void **)&d_b1, sizeof(double) * nn.b[1].n_rows * nn.b[1].n_cols);
-    cudaMalloc((void **)&d_b2, sizeof(double) * nn.b[2].n_rows * nn.b[2].n_cols);
     cudaMalloc((void **)&d_db0, sizeof(double) * nn.b[0].n_rows * nn.b[0].n_cols);
     cudaMalloc((void **)&d_db1, sizeof(double) * nn.b[1].n_rows * nn.b[1].n_cols);
-    cudaMalloc((void **)&d_db2, sizeof(double) * nn.b[2].n_rows * nn.b[2].n_cols);
     cudaMemcpy(d_W0, nn.W[0].memptr(), sizeof(double) * nn.W[0].n_rows * nn.W[0].n_cols, cudaMemcpyHostToDevice);
     cudaMemcpy(d_W1, nn.W[1].memptr(), sizeof(double) * nn.W[1].n_rows * nn.W[1].n_cols, cudaMemcpyHostToDevice);
-    cudaMemcpy(d_W2, nn.W[2].memptr(), sizeof(double) * nn.W[2].n_rows * nn.W[2].n_cols, cudaMemcpyHostToDevice);
     cudaMemcpy(d_b0, nn.b[0].memptr(), sizeof(double) * nn.b[0].n_rows * nn.b[0].n_cols, cudaMemcpyHostToDevice);
     cudaMemcpy(d_b1, nn.b[1].memptr(), sizeof(double) * nn.b[1].n_rows * nn.b[1].n_cols, cudaMemcpyHostToDevice);
-    cudaMemcpy(d_b2, nn.b[2].memptr(), sizeof(double) * nn.b[2].n_rows * nn.b[2].n_cols, cudaMemcpyHostToDevice);
 
     // Gradient descent 
     for(int epoch = 0; epoch < epochs; ++epoch) {
@@ -601,33 +591,27 @@ void parallel_train(NeuralNetwork& nn, const arma::mat& X, const arma::mat& y,
             // forward and backward pass
             struct cache bpcache;
             GPUfeedforward(nn, my_X_batch, bpcache); 
-            // std::cout << "hi made it to here1" << std::endl; 
 
             struct grads bpgrads;
             GPUbackprop(nn, my_y_batch, reg, bpcache, bpgrads);
-            // std::cout << "hi made it to here2" << std::endl;
+
+            // Allocate memory for global gradients
+            double *dW0 = new double[bpgrads.dW[0].n_rows * bpgrads.dW[0].n_cols];
+            double *dW1 = new double[bpgrads.dW[1].n_rows * bpgrads.dW[1].n_cols];
+            double *db0 = new double[bpgrads.db[0].n_rows * bpgrads.db[0].n_cols];
+            double *db1 = new double[bpgrads.db[1].n_rows * bpgrads.db[1].n_cols];
 
             // MPI all reduce local bpgrads
-            // MPI_Allreduce(bpgrads.dW[0].memptr(), dW0, bpgrads.dW[0].n_rows * bpgrads.dW[0].n_cols, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
-            // MPI_Allreduce(bpgrads.dW[1].memptr(), dW1, bpgrads.dW[1].n_rows * bpgrads.dW[1].n_cols, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
-            // MPI_Allreduce(bpgrads.dW[2].memptr(), dW2, bpgrads.dW[2].n_rows * bpgrads.dW[2].n_cols, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
-            // MPI_Allreduce(bpgrads.db[0].memptr(), db0, bpgrads.db[0].n_rows * bpgrads.db[0].n_cols, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
-            // MPI_Allreduce(bpgrads.db[1].memptr(), db1, bpgrads.db[1].n_rows * bpgrads.db[1].n_cols, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
-            // MPI_Allreduce(bpgrads.db[2].memptr(), db2, bpgrads.db[2].n_rows * bpgrads.db[2].n_cols, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+            MPI_Allreduce(bpgrads.dW[0].memptr(), dW0, bpgrads.dW[0].n_rows * bpgrads.dW[0].n_cols, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+            MPI_Allreduce(bpgrads.dW[1].memptr(), dW1, bpgrads.dW[1].n_rows * bpgrads.dW[1].n_cols, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+            MPI_Allreduce(bpgrads.db[0].memptr(), db0, bpgrads.db[0].n_rows * bpgrads.db[0].n_cols, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+            MPI_Allreduce(bpgrads.db[1].memptr(), db1, bpgrads.db[1].n_rows * bpgrads.db[1].n_cols, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
 
             // transfer reduced bpgrads to each gpu
-            cudaMemcpy(d_dW0, bpgrads.dW[0].memptr(), sizeof(double) * nn.W[0].n_rows * nn.W[0].n_cols, cudaMemcpyHostToDevice);
-            cudaMemcpy(d_dW1, bpgrads.dW[1].memptr(), sizeof(double) * nn.W[1].n_rows * nn.W[1].n_cols, cudaMemcpyHostToDevice);
-            cudaMemcpy(d_dW2, bpgrads.dW[2].memptr(), sizeof(double) * nn.W[2].n_rows * nn.W[2].n_cols, cudaMemcpyHostToDevice);
-            cudaMemcpy(d_db0, bpgrads.db[0].memptr(), sizeof(double) * nn.b[0].n_rows * nn.b[0].n_cols, cudaMemcpyHostToDevice);
-            cudaMemcpy(d_db1, bpgrads.db[1].memptr(), sizeof(double) * nn.b[1].n_rows * nn.b[1].n_cols, cudaMemcpyHostToDevice);
-            cudaMemcpy(d_db2, bpgrads.db[2].memptr(), sizeof(double) * nn.b[2].n_rows * nn.b[2].n_cols, cudaMemcpyHostToDevice);
-            // cudaMemcpy(d_dW0, dW0, sizeof(double) * nn.W[0].n_rows * nn.W[0].n_cols, cudaMemcpyHostToDevice);
-            // cudaMemcpy(d_dW1, dW1, sizeof(double) * nn.W[1].n_rows * nn.W[1].n_cols, cudaMemcpyHostToDevice);
-            // cudaMemcpy(d_dW2, dW2, sizeof(double) * nn.W[2].n_rows * nn.W[2].n_cols, cudaMemcpyHostToDevice);
-            // cudaMemcpy(d_db0, db0, sizeof(double) * nn.b[0].n_rows * nn.b[0].n_cols, cudaMemcpyHostToDevice);
-            // cudaMemcpy(d_db1, db1, sizeof(double) * nn.b[1].n_rows * nn.b[1].n_cols, cudaMemcpyHostToDevice);
-            // cudaMemcpy(d_db2, db2, sizeof(double) * nn.b[2].n_rows * nn.b[2].n_cols, cudaMemcpyHostToDevice);
+            cudaMemcpy(d_dW0, dW0, sizeof(double) * nn.W[0].n_rows * nn.W[0].n_cols, cudaMemcpyHostToDevice);
+            cudaMemcpy(d_dW1, dW1, sizeof(double) * nn.W[1].n_rows * nn.W[1].n_cols, cudaMemcpyHostToDevice);
+            cudaMemcpy(d_db0, db0, sizeof(double) * nn.b[0].n_rows * nn.b[0].n_cols, cudaMemcpyHostToDevice);
+            cudaMemcpy(d_db1, db1, sizeof(double) * nn.b[1].n_rows * nn.b[1].n_cols, cudaMemcpyHostToDevice);
 
             // Gradient descent - W0 
             GPUaddition(d_W0, d_dW0, d_W0, 1.0, -learning_rate, nn.W[0].n_rows, nn.W[0].n_cols);
@@ -641,12 +625,6 @@ void parallel_train(NeuralNetwork& nn, const arma::mat& X, const arma::mat& y,
             cudaMemcpy(W1.memptr(), d_W1, sizeof(double) * nn.W[1].n_rows * nn.W[1].n_cols, cudaMemcpyDeviceToHost);
             nn.W[1] = W1;
 
-            // Gradient descent - W2
-            GPUaddition(d_W2, d_dW2, d_W2, 1.0, -learning_rate, nn.W[2].n_rows, nn.W[2].n_cols);
-            arma::mat W2(nn.W[2].n_rows, nn.W[2].n_cols);
-            cudaMemcpy(W2.memptr(), d_W2, sizeof(double) * nn.W[2].n_rows * nn.W[2].n_cols, cudaMemcpyDeviceToHost);
-            nn.W[2] = W2;
-
             // Gradient descent - b0
             GPUaddition(d_b0, d_db0, d_b0, 1.0, -learning_rate, nn.b[0].n_rows, nn.b[0].n_cols);
             arma::mat b0(nn.b[0].n_rows, nn.b[0].n_cols);
@@ -658,12 +636,6 @@ void parallel_train(NeuralNetwork& nn, const arma::mat& X, const arma::mat& y,
             arma::mat b1(nn.b[1].n_rows, nn.b[1].n_cols);
             cudaMemcpy(b1.memptr(), d_b1, sizeof(double) * nn.b[1].n_rows * nn.b[1].n_cols, cudaMemcpyDeviceToHost);
             nn.b[1] = b1;
-
-            // Gradient descent - b2
-            GPUaddition(d_b2, d_db2, d_b2, 1.0, -learning_rate, nn.b[2].n_rows, nn.b[2].n_cols);
-            arma::mat b2(nn.b[2].n_rows, nn.b[2].n_cols);
-            cudaMemcpy(b2.memptr(), d_b2, sizeof(double) * nn.b[2].n_rows * nn.b[2].n_cols, cudaMemcpyDeviceToHost);
-            nn.b[2] = b2;
 
 
             // do not make any edits past here. All of this should be fine. 
@@ -688,14 +660,10 @@ void parallel_train(NeuralNetwork& nn, const arma::mat& X, const arma::mat& y,
     // CUDA deallocation
     cudaFree(d_W0);
     cudaFree(d_W1);
-    cudaFree(d_W2);
     cudaFree(d_dW0);
     cudaFree(d_dW1);
-    cudaFree(d_dW2);
     cudaFree(d_b0);
     cudaFree(d_b1);
-    cudaFree(d_b2);
     cudaFree(d_db0);
     cudaFree(d_db1);
-    cudaFree(d_db2);
 }
