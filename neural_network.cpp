@@ -568,7 +568,6 @@ void parallel_train(NeuralNetwork& nn, const arma::mat& X, const arma::mat& y,
             // assert(X_batch_n_rows == y_batch_n_rows); // this is not true 
             int local_size = X_batch_n_cols / num_procs; // approximate number of columns to send to each process (floor)
 
-            // if (rank==0){
             int *displs_x = new int[num_procs];
             int *displs_y = new int[num_procs];
             int *counts_x = new int[num_procs];
@@ -589,20 +588,12 @@ void parallel_train(NeuralNetwork& nn, const arma::mat& X, const arma::mat& y,
                 }
                 // std::cout << "X_batch_n_cols, counts[i] and displs[i] are:: " << X_batch_n_cols << ", " << counts_x[i] / X_batch_n_rows << ", " << displs_x[i] / X_batch_n_rows << std::endl;
             }
-            // }
 
             // calc how many elements I expect to receive
-            int recv_count_x;
-            int recv_count_y;
-            if (X_batch_n_cols%num_procs != 0 && rank == num_procs - 1){ // if I'm the last process (who will receive a few extra columns)
-                recv_count_x = X_batch_n_rows * (X_batch_n_cols - local_size * rank);
-                recv_count_y = y_batch_n_rows * (X_batch_n_cols - local_size * rank);
-            }else{
-                recv_count_x = X_batch_n_rows * local_size;
-                recv_count_y = y_batch_n_rows * local_size;
-            }
-            // std::cout << "On rank " << rank << " I want to make an X matrix of size: " << X_batch_n_rows << " x " << recv_count_x / X_batch_n_rows << std::endl;
-            // std::cout << "On rank " << rank << " I want to make an Y matrix of size: " << y_batch_n_rows << " x " << recv_count_y / y_batch_n_rows << std::endl;
+            int recv_count_x = counts_x[rank];
+            int recv_count_y = counts_y[rank];
+
+            // Use scatterv to scatter input data to different processes 
             arma::mat my_X_batch(X_batch_n_rows, recv_count_x / X_batch_n_rows);
             arma::mat my_y_batch(y_batch_n_rows, recv_count_y / y_batch_n_rows);
             // std::cout << "I expect to receive " << recv_count_x / X_batch_n_rows << " elements on rank " << rank << std::endl;
@@ -613,6 +604,8 @@ void parallel_train(NeuralNetwork& nn, const arma::mat& X, const arma::mat& y,
 
             // std::cout << "rank and norm(x): " << rank << " and " << norm(my_X_batch, 2) << std::endl;
             // std::cout << "rank and norm(y): " << rank << " and " << norm(my_y_batch, 2) << std::endl; // well these certainly seem different for different processes 
+            std::cout << "my_x_batch.n_rows and my_x_batch.n_cols " << my_X_batch.n_rows << ", " << my_X_batch.n_cols << std::endl;
+            std::cout << "x_batch.n_rows and x_batch.n_cols " << X_batch.n_rows << ", " << X_batch.n_cols << std::endl;
             // exit(EXIT_FAILURE);
 
             // forward and backward pass
@@ -622,7 +615,9 @@ void parallel_train(NeuralNetwork& nn, const arma::mat& X, const arma::mat& y,
             struct grads bpgrads;
             GPUbackprop(nn, my_y_batch, reg, bpcache, bpgrads);
             // std::cout << "rank and norm(bpgrads.dW[0]): " << rank << " and " << norm(bpgrads.dW[0], 2) << std::endl; // well these are certainly different 
-            // std::cout << "rank and norm(bpgrads.dW[1]): " << rank << " and " << norm(bpgrads.dW[1], 2) << std::endl; 
+            // std::cout << "rank and norm(bpgrads.dW[1]): " << rank << " and " << norm(bpgrads.dW[1], 2) << std::endl;
+            // std::cout << "rank and norm(bpgrads.db[0]): " << rank << " and " << norm(bpgrads.db[0], 2) << std::endl; // well these are certainly different
+            // std::cout << "rank and norm(bpgrads.db[1]): " << rank << " and " << norm(bpgrads.db[1], 2) << std::endl;
             // exit(EXIT_FAILURE);
 
             // Allocate memory for global gradients
@@ -647,7 +642,6 @@ void parallel_train(NeuralNetwork& nn, const arma::mat& X, const arma::mat& y,
 
             // Gradient descent - W0
             // std::cout << "hello from rank " << rank << " where I nn.W[0].n_rows is:  " << nn.W[0].n_rows << std::endl; // all are same 
-
             GPUaddition(d_W0, d_dW0, d_W0, 1.0, -learning_rate, nn.W[0].n_rows, nn.W[0].n_cols);
             arma::mat W0(nn.W[0].n_rows, nn.W[0].n_cols);
             cudaMemcpy(W0.memptr(), d_W0, sizeof(double) * nn.W[0].n_rows * nn.W[0].n_cols, cudaMemcpyDeviceToHost);
