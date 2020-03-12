@@ -147,6 +147,26 @@ void backprop(NeuralNetwork& nn, const arma::mat& y, double reg,
     bpgrads.db[0] = arma::sum(dz1, 1);
 }
 
+void backprop2(NeuralNetwork &nn, const arma::mat &y, double reg,
+              const struct cache &bpcache, struct grads &bpgrads, int num_procs)
+{
+    bpgrads.dW.resize(2);
+    bpgrads.db.resize(2);
+    int N = y.n_cols;
+    int normalization = N * num_procs;
+
+    // std::cout << "backprop " << bpcache.yc << "\n";
+    arma::mat diff = (1.0 / normalization) * (bpcache.yc - y);
+    bpgrads.dW[1] = diff * bpcache.a[0].t() + reg * nn.W[1];
+    bpgrads.db[1] = arma::sum(diff, 1);
+    arma::mat da1 = nn.W[1].t() * diff;
+
+    arma::mat dz1 = da1 % bpcache.a[0] % (1 - bpcache.a[0]);
+
+    bpgrads.dW[0] = dz1 * bpcache.X.t() + reg * nn.W[0];
+    bpgrads.db[0] = arma::sum(dz1, 1);
+}
+
 /*
  * Computes the Cross-Entropy loss function for the neural network.
  */
@@ -613,10 +633,13 @@ void parallel_train(NeuralNetwork& nn, const arma::mat& X, const arma::mat& y,
 
             // forward and backward pass
             struct cache bpcache;
-            GPUfeedforward(nn, my_X_batch, bpcache); 
+            GPUfeedforward(nn, my_X_batch, bpcache); // feedforward okay 
+            // feedforward(nn, my_X_batch, bpcache); 
 
             struct grads bpgrads;
-            GPUbackprop(nn, my_y_batch, reg, bpcache, bpgrads, num_procs);
+            GPUbackprop(nn, my_y_batch, reg, bpcache, bpgrads, num_procs); // backprop okay 
+            // backprop2(nn, my_y_batch, reg, bpcache, bpgrads, num_procs); 
+
             // std::cout << "rank and norm(bpgrads.dW[0]): " << rank << " and " << norm(bpgrads.dW[0], 2) << std::endl; // well these are certainly different 
             // std::cout << "rank and norm(bpgrads.dW[1]): " << rank << " and " << norm(bpgrads.dW[1], 2) << std::endl;
             // std::cout << "rank and norm(bpgrads.db[0]): " << rank << " and " << norm(bpgrads.db[0], 2) << std::endl; // well these are certainly different
@@ -672,6 +695,20 @@ void parallel_train(NeuralNetwork& nn, const arma::mat& X, const arma::mat& y,
             nn.b[1] = b1;
             // std::cout << "rank and norm(nn.b[1]): " << rank << " and " << norm(nn.b[1], 2) << std::endl; //
             // exit(EXIT_FAILURE);
+
+            // Gradient descent step on CPU. gives same result as gpu calculations above. 
+            // arma::mat W0(nn.W[0].n_rows, nn.W[0].n_cols);
+            // arma::mat W1(nn.W[1].n_rows, nn.W[1].n_cols);
+            // arma::mat b0(nn.b[0].n_rows, nn.b[0].n_cols);
+            // arma::mat b1(nn.b[1].n_rows, nn.b[1].n_cols);
+            // MPI_Allreduce(bpgrads.dW[0].memptr(), W0.memptr(), bpgrads.dW[0].n_rows * bpgrads.dW[0].n_cols, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+            // MPI_Allreduce(bpgrads.dW[1].memptr(), W1.memptr(), bpgrads.dW[1].n_rows * bpgrads.dW[1].n_cols, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+            // MPI_Allreduce(bpgrads.db[0].memptr(), b0.memptr(), bpgrads.db[0].n_rows * bpgrads.db[0].n_cols, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+            // MPI_Allreduce(bpgrads.db[1].memptr(), b1.memptr(), bpgrads.db[1].n_rows * bpgrads.db[1].n_cols, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+            // nn.W[0] -= learning_rate * W0;
+            // nn.W[1] -= learning_rate * W1;
+            // nn.b[0] -= learning_rate * b0;
+            // nn.b[1] -= learning_rate * b1;
 
             // do not make any edits past here. All of this should be fine. 
             if(print_every <= 0) {
