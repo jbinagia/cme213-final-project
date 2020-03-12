@@ -540,7 +540,64 @@ void parallel_train(NeuralNetwork& nn, const arma::mat& X, const arma::mat& y,
     cudaMemcpy(d_b0, nn.b[0].memptr(), sizeof(double) * nn.b[0].n_rows * nn.b[0].n_cols, cudaMemcpyHostToDevice);
     cudaMemcpy(d_b1, nn.b[1].memptr(), sizeof(double) * nn.b[1].n_rows * nn.b[1].n_cols, cudaMemcpyHostToDevice);
 
-    // SCATTER DATA HERE. loop through all batches here first. To avoid calling so much. 
+    // SCATTER DATA HERE. loop through all batches here first. To avoid calling so much.
+
+    // Broadcast dimensions of X and y to other processes
+    int X_n_rows;
+    int X_n_cols;
+    int y_n_rows;
+    int y_n_cols;
+    X_n_rows = X.n_rows;
+    X_n_cols = X.n_cols;
+    y_n_rows = y.n_rows;
+    y_n_cols = y.n_cols;
+    MPI_Bcast(&X_n_rows, 1, MPI_INT, 0, MPI_COMM_WORLD);
+    MPI_Bcast(&X_n_cols, 1, MPI_INT, 0, MPI_COMM_WORLD);
+    MPI_Bcast(&y_n_rows, 1, MPI_INT, 0, MPI_COMM_WORLD);
+    MPI_Bcast(&y_n_cols, 1, MPI_INT, 0, MPI_COMM_WORLD);
+
+    // Scatter input data to different processes using MPI
+    // assert(X_n_cols == y_n_cols);
+    // assert(X_n_rows == y_n_rows); // this is not true
+    int local_size = X_n_cols / num_procs; // approximate number of columns to send to each process (floor)
+
+    int *displs_x = new int[num_procs];
+    int *displs_y = new int[num_procs];
+    int *counts_x = new int[num_procs];
+    int *counts_y = new int[num_procs];
+    // std::cout << "X_n_cols, num_procs, local_size: " << X_n_cols << ", " << num_procs << ", " << local_size << std::endl;
+
+    for (int i = 0; i < num_procs; i++)
+    {
+        displs_x[i] = X_n_rows * local_size * i;
+        displs_y[i] = y_n_rows * local_size * i;
+        if (X_n_cols % num_procs != 0 && i == num_procs - 1)
+        { // if the last process needs to be assigned a few extra columns
+            counts_x[i] = X_n_rows * (X_n_cols - local_size * i);
+            counts_y[i] = y_n_rows * (X_n_cols - local_size * i);
+        }
+        else
+        {
+            counts_x[i] = X_n_rows * local_size;
+            counts_y[i] = y_n_rows * local_size;
+        }
+        // std::cout << "X_n_cols, counts[i] and displs[i] are:: " << X_n_cols << ", " << counts_x[i] / X_n_rows << ", " << displs_x[i] / X_n_rows << std::endl;
+    }
+
+    // calc how many elements I expect to receive
+    int recv_count_x = counts_x[rank];
+    int recv_count_y = counts_y[rank];
+
+    // Use scatterv to scatter input data to different processes
+    arma::mat my_X(X_n_rows, recv_count_x / X_n_rows);
+    arma::mat my_y(y_n_rows, recv_count_y / y_n_rows);
+    // std::cout << "I expect to receive " << recv_count_x / X_n_rows << " elements on rank " << rank << std::endl;
+
+    // rank = 0 scatter to other processes. Use scatter_v to handle when the number of processes does not divide evently into total number of columns.
+    MPI_Scatterv(X.memptr(), counts_x, displs_x, MPI_DOUBLE, my_X.memptr(), recv_count_x, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+    MPI_Scatterv(y.memptr(), counts_y, displs_y, MPI_DOUBLE, my_y.memptr(), recv_count_y, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+    // std::cout << batch_size << " and " << batch_size/4 << std::endl;  // 800 and 200 
+    // exit(EXIT_FAILURE);
 
     // Gradient descent 
     for(int epoch = 0; epoch < epochs; ++epoch) {
@@ -554,161 +611,86 @@ void parallel_train(NeuralNetwork& nn, const arma::mat& X, const arma::mat& y,
              * 3. reduce the coefficient updates and broadcast to all nodes with `MPI_Allreduce()'
              * 4. update local network coefficient at each node
              */
+            int last_col = std::min((batch + 1) * batch_size/num_procs - 1, N/num_procs - 1);
+            arma::mat X_batch = my_X.cols(batch * batch_size/num_procs, last_col);
+            arma::mat y_batch = my_y.cols(batch * batch_size/num_procs, last_col);
+            // printf("My rank is [%1d] and for this batch I work on columns %1d to %1d.\n", rank, batch * batch_size / num_procs, last_col);
+            // if (epoch==1) exit(EXIT_FAILURE);
 
-            int X_batch_n_rows;
-            int X_batch_n_cols;
-            int y_batch_n_rows;
-            int y_batch_n_cols;
-            arma::mat X_batch;
-            arma::mat y_batch;
-
-            // Create batch on rank 0 
-            if (rank==0){
-                int last_col = std::min((batch + 1)*batch_size-1, N-1);
-                // std::cout << "Hi from rank " << rank <<" and " << y.n_rows << ", " << y.n_cols << std::endl; // both have same value of last_col, batch_size, batch. Important: X and y only on rank 0!
-                X_batch = X.cols(batch * batch_size, last_col);
-                y_batch = y.cols(batch * batch_size, last_col);
-            }
-
-            // Broadcast dimensions of X_batch and y_batch to other processes
-            X_batch_n_rows = X_batch.n_rows;
-            X_batch_n_cols = X_batch.n_cols;
-            y_batch_n_rows = y_batch.n_rows;
-            y_batch_n_cols = y_batch.n_cols;
-            MPI_Bcast(&X_batch_n_rows, 1, MPI_INT, 0, MPI_COMM_WORLD);
-            MPI_Bcast(&X_batch_n_cols, 1, MPI_INT, 0, MPI_COMM_WORLD);
-            MPI_Bcast(&y_batch_n_rows, 1, MPI_INT, 0, MPI_COMM_WORLD);
-            MPI_Bcast(&y_batch_n_cols, 1, MPI_INT, 0, MPI_COMM_WORLD);
-            // std::cout << "Hi from rank " << rank << " where X_batch_n_cols is: " << X_batch_n_cols << std::endl; 
-
-            // TODO
-            // for all-reduce, we want to transfer each gradient to the host and then all reduce
-            // we only all-reduce the delta in the GD calc. so we can transfer that true delta back to each device
-            // so everyone can update the network coefficients. then send them back to the host as we do now.
-
-            // Scatter input data to different processes using MPI
-            // assert(X_batch_n_cols == y_batch.n_cols);
-            // assert(X_batch_n_rows == y_batch_n_rows); // this is not true 
-            int local_size = X_batch_n_cols / num_procs; // approximate number of columns to send to each process (floor)
-
-            int *displs_x = new int[num_procs];
-            int *displs_y = new int[num_procs];
-            int *counts_x = new int[num_procs];
-            int *counts_y = new int[num_procs];
-            // std::cout << "X_batch_n_cols, num_procs, local_size: " << X_batch_n_cols << ", " << num_procs << ", " << local_size << std::endl; 
-        
-
-            for (int i = 0; i < num_procs; i++)
-            {
-                displs_x[i] = X_batch_n_rows*local_size*i;
-                displs_y[i] = y_batch_n_rows * local_size * i;
-                if (X_batch_n_cols%num_procs != 0 && i == num_procs - 1){ // if the last process needs to be assigned a few extra columns
-                    counts_x[i] = X_batch_n_rows * (X_batch_n_cols - local_size * i);
-                    counts_y[i] = y_batch_n_rows * (X_batch_n_cols - local_size * i);
-                }else{
-                    counts_x[i] = X_batch_n_rows * local_size;
-                    counts_y[i] = y_batch_n_rows * local_size;
-                }
-                // std::cout << "X_batch_n_cols, counts[i] and displs[i] are:: " << X_batch_n_cols << ", " << counts_x[i] / X_batch_n_rows << ", " << displs_x[i] / X_batch_n_rows << std::endl;
-            }
-
-            // calc how many elements I expect to receive
-            int recv_count_x = counts_x[rank];
-            int recv_count_y = counts_y[rank];
-
-            // Use scatterv to scatter input data to different processes 
-            arma::mat my_X_batch(X_batch_n_rows, recv_count_x / X_batch_n_rows);
-            arma::mat my_y_batch(y_batch_n_rows, recv_count_y / y_batch_n_rows);
-            // std::cout << "I expect to receive " << recv_count_x / X_batch_n_rows << " elements on rank " << rank << std::endl;
-
-            // rank = 0 scatter to other processes. Use scatter_v to handle when the number of processes does not divide evently into total number of columns. 
-            MPI_Scatterv(X_batch.memptr(), counts_x, displs_x, MPI_DOUBLE, my_X_batch.memptr(), recv_count_x, MPI_DOUBLE, 0, MPI_COMM_WORLD);
-            MPI_Scatterv(y_batch.memptr(), counts_y, displs_y, MPI_DOUBLE, my_y_batch.memptr(), recv_count_y, MPI_DOUBLE, 0, MPI_COMM_WORLD);
-
-            // std::cout << "rank and norm(x): " << rank << " and " << norm(my_X_batch, 2) << std::endl;
-            // std::cout << "rank and norm(y): " << rank << " and " << norm(my_y_batch, 2) << std::endl; // well these certainly seem different for different processes 
-            // std::cout << "my_x_batch.n_rows and my_x_batch.n_cols " << my_X_batch.n_rows << ", " << my_X_batch.n_cols << std::endl;
-            // std::cout << "x_batch.n_rows and x_batch.n_cols " << X_batch.n_rows << ", " << X_batch.n_cols << std::endl;
-            // exit(EXIT_FAILURE);
 
             // forward and backward pass
             struct cache bpcache;
-            GPUfeedforward(nn, my_X_batch, bpcache); // feedforward okay 
-            // feedforward(nn, my_X_batch, bpcache); 
+            // GPUfeedforward(nn, X_batch, bpcache); // feedforward okay 
+            feedforward(nn, X_batch, bpcache); 
 
             struct grads bpgrads;
-            GPUbackprop(nn, my_y_batch, reg, bpcache, bpgrads, num_procs); // backprop okay 
-            // backprop2(nn, my_y_batch, reg, bpcache, bpgrads, num_procs); 
+            // GPUbackprop(nn, y_batch, reg, bpcache, bpgrads, num_procs); // backprop okay 
+            backprop2(nn, y_batch, reg, bpcache, bpgrads, num_procs); 
 
-            // std::cout << "rank and norm(bpgrads.dW[0]): " << rank << " and " << norm(bpgrads.dW[0], 2) << std::endl; // well these are certainly different 
-            // std::cout << "rank and norm(bpgrads.dW[1]): " << rank << " and " << norm(bpgrads.dW[1], 2) << std::endl;
-            // std::cout << "rank and norm(bpgrads.db[0]): " << rank << " and " << norm(bpgrads.db[0], 2) << std::endl; // well these are certainly different
-            // std::cout << "rank and norm(bpgrads.db[1]): " << rank << " and " << norm(bpgrads.db[1], 2) << std::endl;
-            // exit(EXIT_FAILURE);
 
-            // Allocate memory for global gradients
-            double *dW0 = new double[bpgrads.dW[0].n_rows * bpgrads.dW[0].n_cols];
-            double *dW1 = new double[bpgrads.dW[1].n_rows * bpgrads.dW[1].n_cols];
-            double *db0 = new double[bpgrads.db[0].n_rows * bpgrads.db[0].n_cols];
-            double *db1 = new double[bpgrads.db[1].n_rows * bpgrads.db[1].n_cols];
+            // // Allocate memory for global gradients
+            // double *dW0 = new double[bpgrads.dW[0].n_rows * bpgrads.dW[0].n_cols];
+            // double *dW1 = new double[bpgrads.dW[1].n_rows * bpgrads.dW[1].n_cols];
+            // double *db0 = new double[bpgrads.db[0].n_rows * bpgrads.db[0].n_cols];
+            // double *db1 = new double[bpgrads.db[1].n_rows * bpgrads.db[1].n_cols];
 
-            // MPI all reduce local bpgrads
-            MPI_Allreduce(bpgrads.dW[0].memptr(), dW0, bpgrads.dW[0].n_rows * bpgrads.dW[0].n_cols, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
-            MPI_Allreduce(bpgrads.dW[1].memptr(), dW1, bpgrads.dW[1].n_rows * bpgrads.dW[1].n_cols, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
-            MPI_Allreduce(bpgrads.db[0].memptr(), db0, bpgrads.db[0].n_rows * bpgrads.db[0].n_cols, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
-            MPI_Allreduce(bpgrads.db[1].memptr(), db1, bpgrads.db[1].n_rows * bpgrads.db[1].n_cols, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
-            // std::cout << "hello from rank " << rank << " where I allocated " << bpgrads.db[1].n_rows * bpgrads.db[1].n_cols << " for db1 " << std::endl; // all are same
+            // // MPI all reduce local bpgrads
+            // MPI_Allreduce(bpgrads.dW[0].memptr(), dW0, bpgrads.dW[0].n_rows * bpgrads.dW[0].n_cols, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+            // MPI_Allreduce(bpgrads.dW[1].memptr(), dW1, bpgrads.dW[1].n_rows * bpgrads.dW[1].n_cols, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+            // MPI_Allreduce(bpgrads.db[0].memptr(), db0, bpgrads.db[0].n_rows * bpgrads.db[0].n_cols, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+            // MPI_Allreduce(bpgrads.db[1].memptr(), db1, bpgrads.db[1].n_rows * bpgrads.db[1].n_cols, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+            // // std::cout << "hello from rank " << rank << " where I allocated " << bpgrads.db[1].n_rows * bpgrads.db[1].n_cols << " for db1 " << std::endl; // all are same
 
-            // transfer reduced bpgrads to each gpu
-            cudaMemcpy(d_dW0, dW0, sizeof(double) * nn.W[0].n_rows * nn.W[0].n_cols, cudaMemcpyHostToDevice);
-            cudaMemcpy(d_dW1, dW1, sizeof(double) * nn.W[1].n_rows * nn.W[1].n_cols, cudaMemcpyHostToDevice);
-            cudaMemcpy(d_db0, db0, sizeof(double) * nn.b[0].n_rows * nn.b[0].n_cols, cudaMemcpyHostToDevice);
-            cudaMemcpy(d_db1, db1, sizeof(double) * nn.b[1].n_rows * nn.b[1].n_cols, cudaMemcpyHostToDevice);
-            // std::cout << "On rank " << rank << " I have local and global gradient dW0[100]: " << bpgrads.dW[0][100] << ", " << dW0[100] << std::endl; // this makes it look like all procces are calculating the same local gradients? 
+            // // transfer reduced bpgrads to each gpu
+            // cudaMemcpy(d_dW0, dW0, sizeof(double) * nn.W[0].n_rows * nn.W[0].n_cols, cudaMemcpyHostToDevice);
+            // cudaMemcpy(d_dW1, dW1, sizeof(double) * nn.W[1].n_rows * nn.W[1].n_cols, cudaMemcpyHostToDevice);
+            // cudaMemcpy(d_db0, db0, sizeof(double) * nn.b[0].n_rows * nn.b[0].n_cols, cudaMemcpyHostToDevice);
+            // cudaMemcpy(d_db1, db1, sizeof(double) * nn.b[1].n_rows * nn.b[1].n_cols, cudaMemcpyHostToDevice);
+            // // std::cout << "On rank " << rank << " I have local and global gradient dW0[100]: " << bpgrads.dW[0][100] << ", " << dW0[100] << std::endl; // this makes it look like all procces are calculating the same local gradients? 
 
-            // Gradient descent - W0
-            // std::cout << "hello from rank " << rank << " where I nn.W[0].n_rows is:  " << nn.W[0].n_rows << std::endl; // all are same 
-            GPUaddition(d_W0, d_dW0, d_W0, 1.0, -learning_rate, nn.W[0].n_rows, nn.W[0].n_cols);
-            arma::mat W0(nn.W[0].n_rows, nn.W[0].n_cols);
-            cudaMemcpy(W0.memptr(), d_W0, sizeof(double) * nn.W[0].n_rows * nn.W[0].n_cols, cudaMemcpyDeviceToHost);
-            nn.W[0] = W0;
-            // std::cout << "rank and norm(nn.W[0]): " << rank << " and " << norm(nn.W[0], 2) << std::endl; //
+            // // Gradient descent - W0
+            // // std::cout << "hello from rank " << rank << " where I nn.W[0].n_rows is:  " << nn.W[0].n_rows << std::endl; // all are same 
+            // GPUaddition(d_W0, d_dW0, d_W0, 1.0, -learning_rate, nn.W[0].n_rows, nn.W[0].n_cols);
+            // arma::mat W0(nn.W[0].n_rows, nn.W[0].n_cols);
+            // cudaMemcpy(W0.memptr(), d_W0, sizeof(double) * nn.W[0].n_rows * nn.W[0].n_cols, cudaMemcpyDeviceToHost);
+            // nn.W[0] = W0;
+            // // std::cout << "rank and norm(nn.W[0]): " << rank << " and " << norm(nn.W[0], 2) << std::endl; //
 
-            // Gradient descent - W1
-            GPUaddition(d_W1, d_dW1, d_W1, 1.0, -learning_rate, nn.W[1].n_rows, nn.W[1].n_cols);
-            arma::mat W1(nn.W[1].n_rows, nn.W[1].n_cols);
-            cudaMemcpy(W1.memptr(), d_W1, sizeof(double) * nn.W[1].n_rows * nn.W[1].n_cols, cudaMemcpyDeviceToHost);
-            nn.W[1] = W1;
-            // std::cout << "rank and norm(nn.W[1]): " << rank << " and " << norm(nn.W[1], 2) << std::endl; // 
+            // // Gradient descent - W1
+            // GPUaddition(d_W1, d_dW1, d_W1, 1.0, -learning_rate, nn.W[1].n_rows, nn.W[1].n_cols);
+            // arma::mat W1(nn.W[1].n_rows, nn.W[1].n_cols);
+            // cudaMemcpy(W1.memptr(), d_W1, sizeof(double) * nn.W[1].n_rows * nn.W[1].n_cols, cudaMemcpyDeviceToHost);
+            // nn.W[1] = W1;
+            // // std::cout << "rank and norm(nn.W[1]): " << rank << " and " << norm(nn.W[1], 2) << std::endl; // 
 
-            // Gradient descent - b0
-            GPUaddition(d_b0, d_db0, d_b0, 1.0, -learning_rate, nn.b[0].n_rows, nn.b[0].n_cols);
-            arma::mat b0(nn.b[0].n_rows, nn.b[0].n_cols);
-            cudaMemcpy(b0.memptr(), d_b0, sizeof(double) * nn.b[0].n_rows * nn.b[0].n_cols, cudaMemcpyDeviceToHost);
-            nn.b[0] = b0;
-            // std::cout << "rank and norm(nn.b[0]): " << rank << " and " << norm(nn.b[0], 2) << std::endl; // each b value is exactly double what it should be when you use -n 2
+            // // Gradient descent - b0
+            // GPUaddition(d_b0, d_db0, d_b0, 1.0, -learning_rate, nn.b[0].n_rows, nn.b[0].n_cols);
+            // arma::mat b0(nn.b[0].n_rows, nn.b[0].n_cols);
+            // cudaMemcpy(b0.memptr(), d_b0, sizeof(double) * nn.b[0].n_rows * nn.b[0].n_cols, cudaMemcpyDeviceToHost);
+            // nn.b[0] = b0;
+            // // std::cout << "rank and norm(nn.b[0]): " << rank << " and " << norm(nn.b[0], 2) << std::endl; // each b value is exactly double what it should be when you use -n 2
 
-            // Gradient descent - b1
-            GPUaddition(d_b1, d_db1, d_b1, 1.0, -learning_rate, nn.b[1].n_rows, nn.b[1].n_cols);
-            arma::mat b1(nn.b[1].n_rows, nn.b[1].n_cols);
-            cudaMemcpy(b1.memptr(), d_b1, sizeof(double) * nn.b[1].n_rows * nn.b[1].n_cols, cudaMemcpyDeviceToHost);
-            nn.b[1] = b1;
-            // std::cout << "rank and norm(nn.b[1]): " << rank << " and " << norm(nn.b[1], 2) << std::endl; //
-            // exit(EXIT_FAILURE);
+            // // Gradient descent - b1
+            // GPUaddition(d_b1, d_db1, d_b1, 1.0, -learning_rate, nn.b[1].n_rows, nn.b[1].n_cols);
+            // arma::mat b1(nn.b[1].n_rows, nn.b[1].n_cols);
+            // cudaMemcpy(b1.memptr(), d_b1, sizeof(double) * nn.b[1].n_rows * nn.b[1].n_cols, cudaMemcpyDeviceToHost);
+            // nn.b[1] = b1;
+            // // std::cout << "rank and norm(nn.b[1]): " << rank << " and " << norm(nn.b[1], 2) << std::endl; //
+            // // exit(EXIT_FAILURE);
 
             // Gradient descent step on CPU. gives same result as gpu calculations above. 
-            // arma::mat W0(nn.W[0].n_rows, nn.W[0].n_cols);
-            // arma::mat W1(nn.W[1].n_rows, nn.W[1].n_cols);
-            // arma::mat b0(nn.b[0].n_rows, nn.b[0].n_cols);
-            // arma::mat b1(nn.b[1].n_rows, nn.b[1].n_cols);
-            // MPI_Allreduce(bpgrads.dW[0].memptr(), W0.memptr(), bpgrads.dW[0].n_rows * bpgrads.dW[0].n_cols, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
-            // MPI_Allreduce(bpgrads.dW[1].memptr(), W1.memptr(), bpgrads.dW[1].n_rows * bpgrads.dW[1].n_cols, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
-            // MPI_Allreduce(bpgrads.db[0].memptr(), b0.memptr(), bpgrads.db[0].n_rows * bpgrads.db[0].n_cols, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
-            // MPI_Allreduce(bpgrads.db[1].memptr(), b1.memptr(), bpgrads.db[1].n_rows * bpgrads.db[1].n_cols, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
-            // nn.W[0] -= learning_rate * W0;
-            // nn.W[1] -= learning_rate * W1;
-            // nn.b[0] -= learning_rate * b0;
-            // nn.b[1] -= learning_rate * b1;
+            arma::mat W0(nn.W[0].n_rows, nn.W[0].n_cols);
+            arma::mat W1(nn.W[1].n_rows, nn.W[1].n_cols);
+            arma::mat b0(nn.b[0].n_rows, nn.b[0].n_cols);
+            arma::mat b1(nn.b[1].n_rows, nn.b[1].n_cols);
+            MPI_Allreduce(bpgrads.dW[0].memptr(), W0.memptr(), bpgrads.dW[0].n_rows * bpgrads.dW[0].n_cols, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+            MPI_Allreduce(bpgrads.dW[1].memptr(), W1.memptr(), bpgrads.dW[1].n_rows * bpgrads.dW[1].n_cols, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+            MPI_Allreduce(bpgrads.db[0].memptr(), b0.memptr(), bpgrads.db[0].n_rows * bpgrads.db[0].n_cols, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+            MPI_Allreduce(bpgrads.db[1].memptr(), b1.memptr(), bpgrads.db[1].n_rows * bpgrads.db[1].n_cols, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+            nn.W[0] -= learning_rate * W0;
+            nn.W[1] -= learning_rate * W1;
+            nn.b[0] -= learning_rate * b0;
+            nn.b[1] -= learning_rate * b1;
 
             // do not make any edits past here. All of this should be fine. 
             if(print_every <= 0) {
