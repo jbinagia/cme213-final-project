@@ -357,11 +357,12 @@ void GPUfeedforward(NeuralNetwork& nn, const arma::mat& X, struct cache& cache) 
 }
 
 void GPUbackprop(NeuralNetwork& nn, const arma::mat& y, double reg,
-              const struct cache& bpcache, struct grads& bpgrads) {
+              const struct cache& bpcache, struct grads& bpgrads, int num_procs) {
     bpgrads.dW.resize(2);
     bpgrads.db.resize(2);
     int M = y.n_rows; 
-    int N = y.n_cols;
+    int N = y.n_cols; // check normalization for yc-y 
+    int normalization = y.n_cols*num_procs; 
 
     // CUDA declarations, allocations, memcpy to device
     double* d_yc;
@@ -403,7 +404,7 @@ void GPUbackprop(NeuralNetwork& nn, const arma::mat& y, double reg,
     cudaMemcpy(d_X, bpcache.X.memptr(), sizeof(double) * bpcache.X.n_rows * bpcache.X.n_cols, cudaMemcpyHostToDevice);
 
     // yc - y
-    GPUaddition(d_yc, d_y, d_diff, 1.0 / N, -1.0 / N, M, N);
+    GPUaddition(d_yc, d_y, d_diff, 1.0 / normalization, -1.0 / normalization, M, N);
 
     // start calculating gradients
     cudaMemcpy(d_a0, bpcache.a[0].memptr(), sizeof(double) * bpcache.a[0].n_rows * bpcache.a[0].n_cols, cudaMemcpyHostToDevice);
@@ -519,6 +520,8 @@ void parallel_train(NeuralNetwork& nn, const arma::mat& X, const arma::mat& y,
     cudaMemcpy(d_b0, nn.b[0].memptr(), sizeof(double) * nn.b[0].n_rows * nn.b[0].n_cols, cudaMemcpyHostToDevice);
     cudaMemcpy(d_b1, nn.b[1].memptr(), sizeof(double) * nn.b[1].n_rows * nn.b[1].n_cols, cudaMemcpyHostToDevice);
 
+    // SCATTER DATA HERE. loop through all batches here first. To avoid calling so much. 
+
     // Gradient descent 
     for(int epoch = 0; epoch < epochs; ++epoch) {
         int num_batches = (N + batch_size - 1)/batch_size;
@@ -604,8 +607,8 @@ void parallel_train(NeuralNetwork& nn, const arma::mat& X, const arma::mat& y,
 
             // std::cout << "rank and norm(x): " << rank << " and " << norm(my_X_batch, 2) << std::endl;
             // std::cout << "rank and norm(y): " << rank << " and " << norm(my_y_batch, 2) << std::endl; // well these certainly seem different for different processes 
-            std::cout << "my_x_batch.n_rows and my_x_batch.n_cols " << my_X_batch.n_rows << ", " << my_X_batch.n_cols << std::endl;
-            std::cout << "x_batch.n_rows and x_batch.n_cols " << X_batch.n_rows << ", " << X_batch.n_cols << std::endl;
+            // std::cout << "my_x_batch.n_rows and my_x_batch.n_cols " << my_X_batch.n_rows << ", " << my_X_batch.n_cols << std::endl;
+            // std::cout << "x_batch.n_rows and x_batch.n_cols " << X_batch.n_rows << ", " << X_batch.n_cols << std::endl;
             // exit(EXIT_FAILURE);
 
             // forward and backward pass
@@ -613,7 +616,7 @@ void parallel_train(NeuralNetwork& nn, const arma::mat& X, const arma::mat& y,
             GPUfeedforward(nn, my_X_batch, bpcache); 
 
             struct grads bpgrads;
-            GPUbackprop(nn, my_y_batch, reg, bpcache, bpgrads);
+            GPUbackprop(nn, my_y_batch, reg, bpcache, bpgrads, num_procs);
             // std::cout << "rank and norm(bpgrads.dW[0]): " << rank << " and " << norm(bpgrads.dW[0], 2) << std::endl; // well these are certainly different 
             // std::cout << "rank and norm(bpgrads.dW[1]): " << rank << " and " << norm(bpgrads.dW[1], 2) << std::endl;
             // std::cout << "rank and norm(bpgrads.db[0]): " << rank << " and " << norm(bpgrads.db[0], 2) << std::endl; // well these are certainly different
@@ -646,29 +649,29 @@ void parallel_train(NeuralNetwork& nn, const arma::mat& X, const arma::mat& y,
             arma::mat W0(nn.W[0].n_rows, nn.W[0].n_cols);
             cudaMemcpy(W0.memptr(), d_W0, sizeof(double) * nn.W[0].n_rows * nn.W[0].n_cols, cudaMemcpyDeviceToHost);
             nn.W[0] = W0;
-            std::cout << "rank and norm(nn.W[0]): " << rank << " and " << norm(nn.W[0], 2) << std::endl; //
+            // std::cout << "rank and norm(nn.W[0]): " << rank << " and " << norm(nn.W[0], 2) << std::endl; //
 
             // Gradient descent - W1
             GPUaddition(d_W1, d_dW1, d_W1, 1.0, -learning_rate, nn.W[1].n_rows, nn.W[1].n_cols);
             arma::mat W1(nn.W[1].n_rows, nn.W[1].n_cols);
             cudaMemcpy(W1.memptr(), d_W1, sizeof(double) * nn.W[1].n_rows * nn.W[1].n_cols, cudaMemcpyDeviceToHost);
             nn.W[1] = W1;
-            std::cout << "rank and norm(nn.W[1]): " << rank << " and " << norm(nn.W[1], 2) << std::endl; // 
+            // std::cout << "rank and norm(nn.W[1]): " << rank << " and " << norm(nn.W[1], 2) << std::endl; // 
 
             // Gradient descent - b0
             GPUaddition(d_b0, d_db0, d_b0, 1.0, -learning_rate, nn.b[0].n_rows, nn.b[0].n_cols);
             arma::mat b0(nn.b[0].n_rows, nn.b[0].n_cols);
             cudaMemcpy(b0.memptr(), d_b0, sizeof(double) * nn.b[0].n_rows * nn.b[0].n_cols, cudaMemcpyDeviceToHost);
             nn.b[0] = b0;
-            std::cout << "rank and norm(nn.b[0]): " << rank << " and " << norm(nn.b[0], 2) << std::endl; // each b value is exactly double what it should be when you use -n 2
+            // std::cout << "rank and norm(nn.b[0]): " << rank << " and " << norm(nn.b[0], 2) << std::endl; // each b value is exactly double what it should be when you use -n 2
 
             // Gradient descent - b1
             GPUaddition(d_b1, d_db1, d_b1, 1.0, -learning_rate, nn.b[1].n_rows, nn.b[1].n_cols);
             arma::mat b1(nn.b[1].n_rows, nn.b[1].n_cols);
             cudaMemcpy(b1.memptr(), d_b1, sizeof(double) * nn.b[1].n_rows * nn.b[1].n_cols, cudaMemcpyDeviceToHost);
             nn.b[1] = b1;
-            std::cout << "rank and norm(nn.b[1]): " << rank << " and " << norm(nn.b[1], 2) << std::endl; //
-            exit(EXIT_FAILURE);
+            // std::cout << "rank and norm(nn.b[1]): " << rank << " and " << norm(nn.b[1], 2) << std::endl; //
+            // exit(EXIT_FAILURE);
 
             // do not make any edits past here. All of this should be fine. 
             if(print_every <= 0) {
