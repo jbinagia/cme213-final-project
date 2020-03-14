@@ -652,6 +652,7 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
     // Gradient descent
     NeuralNetwork nn_test(nn.H);
     double my_tol = 1.0e-6; // no differences for tol greater than 1.0e1. start to get errors at 1.0e0
+    bool tests = false; 
     for (int epoch = 0; epoch < epochs; ++epoch)
     {
         int num_batches = (N + batch_size - 1) / batch_size;
@@ -675,7 +676,7 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
             // exit(EXIT_FAILURE); // reaches here fine
 
             // checkpoint 1: compare calculated minibatches to what they should be (obtained directly from X)
-            if (batch==0){
+            if (batch==0 && tests){
                 arma::mat test_X = X.cols(displs_x[rank] / X.n_rows, displs_x[rank] / X.n_rows + batch_size / num_procs - 1);
                 arma::mat test_y = y.cols(displs_y[rank] / y.n_rows, displs_y[rank] / y.n_rows + batch_size / num_procs - 1);
 
@@ -735,7 +736,7 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
             // exit(EXIT_FAILURE); // reaches here fine
 
             // checkpoint 3: compare gathering bpcache from each process vs. calculating it entirely on process 0
-            if (batch==0 && num_procs==4){
+            if (batch==0 && num_procs==4 && tests){
                 arma::mat gather_a0(bpcache.a[0].n_rows, batch_size);
                 arma::mat gather_a1(bpcache.a[1].n_rows, batch_size);
                 arma::mat gather_z0(bpcache.z[0].n_rows, batch_size);
@@ -836,7 +837,7 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
             backprop2(nn, y_batch, reg, bpcache, bpgrads, num_procs); // reg/4 here 
 
             // checkpoint 4: check local gradients
-            if (batch==0){
+            if (batch==0 && tests){
                 // std::cout << "rank and displs_x[rank]/X_n_rows is " << rank << " and " << displs_x[rank] / X_n_rows << std::endl; // to see what part of X each process is starting from
                 NeuralNetwork nn_test4(nn.H);
 
@@ -939,7 +940,7 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
             // // exit(EXIT_FAILURE);
 
             // checkpoint 5: compare network coefficients before gradient descent
-            if (batch==0){
+            if (batch==0 && tests){
                 NeuralNetwork nn_test5(nn.H);
                 if (!arma::approx_equal(nn_test5.W[0], nn.W[0], "both", my_tol, my_tol))
                 {
@@ -994,7 +995,7 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
             nn.b[1] -= learning_rate * b1;
 
             // checkpoint 6: instead of allreduce, sum each local gradient manually 
-            if (batch == 0 && num_procs==4){
+            if (batch == 0 && num_procs==4 && tests){
                 NeuralNetwork nn_test(nn.H);
 
                 // create input
@@ -1079,10 +1080,8 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
                 std::cout << "Number not equal for W[1] is: " << almost_equal_matrix(nn.W[1], nn_test.W[1].memptr(), true) << std::endl;
                 std::cout << "Number not equal for b[0] is: " << almost_equal_matrix(nn.b[0], nn_test.b[0].memptr(), true) << std::endl;
                 std::cout << "Number not equal for b[1] is: " << almost_equal_matrix(nn.b[1], nn_test.b[1].memptr(), true) << std::endl;
-            // }
 
-            // checkpoint 7: check total gradients
-            // if (rank==0 && batch == 0 && num_procs==4){
+                // checkpoint 7: check total gradients
                 NeuralNetwork nn_test2(nn.H);
 
                 arma::mat batch_X2 = arma::join_rows(X.cols(0, batch_size / num_procs - 1), X.cols(displs_x[1] / X_n_rows, displs_x[1] / X_n_rows + batch_size / num_procs - 1));
@@ -1198,7 +1197,7 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
 
 
             // compare to gold standard acting on this batch
-            if (rank == 0 && batch==0 && num_procs==4)
+            if (rank == 0 && batch==0 && num_procs==4 && test)
             {
                 NeuralNetwork nn_test5(nn.H);
 
