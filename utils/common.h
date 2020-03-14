@@ -10,6 +10,16 @@
 struct grads {
     std::vector<arma::mat> dW;
     std::vector<arma::colvec> db;
+
+    // Jeremy edit for debugging
+    arma::mat dz1;
+    arma::mat Xt;
+    arma::mat w0;
+    arma::mat da1;
+    arma::mat a0;
+    arma::mat diff; 
+    arma::mat w1; 
+    arma::mat a0t; 
 };
 
 struct cache {

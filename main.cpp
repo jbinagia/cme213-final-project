@@ -195,7 +195,7 @@ int main(int argc, char* argv[]) {
     arma::mat x_train, y_train, label_train, x_dev, y_dev, label_dev, x_test;
     NeuralNetwork nn(H);
 
-    if(rank == 0) {
+    // if(rank == 0) {
         std::cout << "num_neuron=" << num_neuron << ", reg=" << reg <<
                   ", learning_rate=" << learning_rate
                   << ", num_epochs=" << num_epochs << ", batch_size=" << batch_size << std::endl;
@@ -235,7 +235,7 @@ int main(int argc, char* argv[]) {
            network with test data label to evaluate its precision */
         x_test = arma::zeros(IMAGE_SIZE, NUM_TEST);
         read_mnist(FILE_TEST_IMAGES, x_test);
-    }
+    // } // TODO: don't forget to uncomment
 
     /* Run the sequential code if the serial flag is set */
     NeuralNetwork seq_nn(H);

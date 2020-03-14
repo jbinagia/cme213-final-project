@@ -57,12 +57,20 @@ inline bool almost_equal_ulps(double A, double B, int maxUlpsDiff) {
         bool same = almost_equal_matrix (m, b_memptr, true);
         std::cout << "Compare result: " << same << std::endl;
 */
-inline bool almost_equal_matrix(const arma::mat& M,
+
+// my edit 
+// inline bool almost_equal_matrix(const arma::mat& M,
+//                                 const double* const memptr,
+//                                 bool column_major) {
+inline int almost_equal_matrix(const arma::mat& M,
                                 const double* const memptr,
                                 bool column_major) {
     int n_rows = M.n_rows;
     int n_cols = M.n_cols;
     int idx;
+
+    // my edit
+    int num_wrong = 0; 
 
     for(int j = 0; j < n_cols; j++) {
         for(int i = 0; i < n_rows; i++) {
@@ -72,12 +80,18 @@ inline bool almost_equal_matrix(const arma::mat& M,
             double B = memptr[idx];
 
             if(almost_equal_ulps(A,B,MAX_ULPS_DIFF) == false) {
-                return false;
+            // if (A != B){
+                
+                // my edit
+                // return false;
+                num_wrong = num_wrong + 1; 
             }
         }
     }
 
-    return true;
+    // my edit
+    return num_wrong; 
+    // return true;
 }
 
 #endif
