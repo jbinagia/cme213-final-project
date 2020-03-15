@@ -577,7 +577,10 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
     cudaMemcpy(d_b0, nn.b[0].memptr(), sizeof(double) * nn.b[0].n_rows * nn.b[0].n_cols, cudaMemcpyHostToDevice);
     cudaMemcpy(d_b1, nn.b[1].memptr(), sizeof(double) * nn.b[1].n_rows * nn.b[1].n_cols, cudaMemcpyHostToDevice);
 
-    // SCATTER DATA HERE. loop through all batches here first. To avoid calling so much.
+
+    // -----------------------------------
+    // Scatter data to different processes
+    // -----------------------------------
 
     // Broadcast dimensions of X and y to other processes
     int X_n_rows;
@@ -591,71 +594,73 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
     MPI_Bcast(&X_n_rows, 1, MPI_INT, 0, MPI_COMM_WORLD);
     MPI_Bcast(&X_n_cols, 1, MPI_INT, 0, MPI_COMM_WORLD);
     MPI_Bcast(&y_n_rows, 1, MPI_INT, 0, MPI_COMM_WORLD);
-    MPI_Bcast(&y_n_cols, 1, MPI_INT, 0, MPI_COMM_WORLD);
+    MPI_Bcast(&y_n_cols, 1, MPI_INT, 0, MPI_COMM_WORLD); // can delete all references to y_n_cols 
 
-    // Scatter input data to different processes using MPI
-    // assert(X_n_cols == y_n_cols);
-    // assert(X_n_rows == y_n_rows); // this is not true
-    int local_size = X_n_cols / num_procs; // approximate number of columns to send to each process (floor)
+    // define useful constants 
+    int my_num_cols = X_n_cols / num_procs; // approximate number of columns of X and y to distribute to each process (floor)
+    int num_batches = (N + batch_size - 1) / batch_size; // number of batches there will be (last batch is of size <= batch_size)
+    int minibatch_size = (batch_size + num_procs - 1) / num_procs; // given a batch size, how many training examples to distribute to each process
 
+    // define data structure to hold each process's input data. The i-th entry to these vectors corresponds to batch # i. 
+    std::vector<arma::mat> my_X_batches;
+    std::vector<arma::mat> my_y_batches;
+
+    // for each batch up to the last batch, scatter the data and place into my_X_batches and my_y_bathes
+    arma::mat my_X(X_n_rows, minibatch_size);
+    arma::mat my_y(y_n_rows, minibatch_size);
+    for (int batch = 0; batch < num_batches-1; ++batch){
+        MPI_Scatter(X.memptr(), X_n_rows * minibatch_size, MPI_DOUBLE, my_X.memptr(), X_n_rows * minibatch_size, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+        MPI_Scatter(y.memptr(), y_n_rows * minibatch_size, MPI_DOUBLE, my_y.memptr(), y_n_rows * minibatch_size, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+        my_X_batches.push_back(my_X);
+        my_y_batches.push_back(my_y);
+    }
+
+    // displacements and counts to be used for scatterv below (both in terms of # of elements)
     int *displs_x = new int[num_procs];
     int *displs_y = new int[num_procs];
     int *counts_x = new int[num_procs];
     int *counts_y = new int[num_procs];
-    // std::cout << "X_n_cols, num_procs, local_size: " << X_n_cols << ", " << num_procs << ", " << local_size << std::endl;
 
     for (int i = 0; i < num_procs; i++)
     {
-        displs_x[i] = X_n_rows * local_size * i;
-        displs_y[i] = y_n_rows * local_size * i;
-        if (X_n_cols % num_procs != 0 && i == num_procs - 1)
-        { // if the last process needs to be assigned a few extra columns
-            counts_x[i] = X_n_rows * (X_n_cols - local_size * i);
-            counts_y[i] = y_n_rows * (X_n_cols - local_size * i);
+        int last_batch_size = X_n_cols - (num_batches-1)*batch_size;
+        int last_minibatch_size = (last_batch_size + num_procs - 1) / num_procs; // new minibatch size for this last batch. last process gets the least.
+
+        displs_x[i] = X_n_rows * last_minibatch_size * i + X_n_rows * (num_batches - 1) * batch_size;
+        displs_y[i] = y_n_rows * last_minibatch_size * i + y_n_rows * (num_batches - 1) * batch_size;
+
+        if (last_batch_size % num_procs != 0 && i == num_procs - 1)
+        { // if the last process needs to be assigned a few less columns
+            counts_x[i] = X_n_rows * (last_batch_size - last_minibatch_size * i);
+            counts_y[i] = y_n_rows * (last_batch_size - last_minibatch_size * i);
         }
         else
         {
-            counts_x[i] = X_n_rows * local_size;
-            counts_y[i] = y_n_rows * local_size;
+            counts_x[i] = X_n_rows * last_minibatch_size;
+            counts_y[i] = y_n_rows * last_minibatch_size;
         }
-        // std::cout << "X_n_cols, counts[i] and displs[i] are:: " << X_n_cols << ", " << counts_x[i] / X_n_rows << ", " << displs_x[i] / X_n_rows << std::endl;
     }
-    // exit(EXIT_FAILURE);
 
-    // calc how many elements I expect to receive
+    // calc how many elements I expect to receive given my rank 
     int recv_count_x = counts_x[rank];
     int recv_count_y = counts_y[rank];
 
-    // Use scatterv to scatter input data to different processes
-    arma::mat my_X(X_n_rows, recv_count_x / X_n_rows);
-    arma::mat my_y(y_n_rows, recv_count_y / y_n_rows);
-    // std::cout << "I expect to receive " << recv_count_x / X_n_rows << " elements on rank " << rank << std::endl;
+    // Use scatterv to scatter input data to different processes for the final batch
+    arma::mat my_last_X(X_n_rows, recv_count_x / X_n_rows);
+    arma::mat my_last_y(y_n_rows, recv_count_y / y_n_rows);
+    MPI_Scatterv(X.memptr(), counts_x, displs_x, MPI_DOUBLE, my_last_X.memptr(), recv_count_x, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+    MPI_Scatterv(y.memptr(), counts_y, displs_y, MPI_DOUBLE, my_last_y.memptr(), recv_count_y, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+    my_X_batches.push_back(my_last_X);
+    my_y_batches.push_back(my_last_y);
 
-    // rank = 0 scatter to other processes. Use scatter_v to handle when the number of processes does not divide evently into total number of columns.
-    MPI_Scatterv(X.memptr(), counts_x, displs_x, MPI_DOUBLE, my_X.memptr(), recv_count_x, MPI_DOUBLE, 0, MPI_COMM_WORLD);
-    MPI_Scatterv(y.memptr(), counts_y, displs_y, MPI_DOUBLE, my_y.memptr(), recv_count_y, MPI_DOUBLE, 0, MPI_COMM_WORLD);
-    // std::cout << "X.n_cols is: " << X.n_cols << std::endl;
-    // std::cout << my_X.n_cols-1 << " and " << N / num_procs - 1 << std::endl; // 800 and 200
-    // exit(EXIT_FAILURE);
 
-    // TODO - try gatherv here
-    // arma::mat gather_X(X.n_rows, X.n_cols);
-    // arma::mat gather_y(y.n_rows, y.n_cols);
-    // MPI_Gatherv(my_X.memptr(), recv_count_x, MPI_DOUBLE, gather_X.memptr(), counts_x, displs_x, 0, MPI_COMM_WORLD);
-    // MPI_Gatherv(my_y.memptr(), recv_count_y, MPI_DOUBLE, gather_y.memptr(), counts_y, displs_y, 0, MPI_COMM_WORLD);
-    // if (rank==0){
-    //     std::cout << arma::approx_equal(gather_X, X, "both", my_tol, my_tol) << std::endl;
-    //     std::cout << arma::approx_equal(gather_y, y, "both", my_tol, my_tol) << std::endl;
-    // }
-    // exit(EXIT_FAILURE);
-
-    // Gradient descent
-    NeuralNetwork nn_test(nn.H);
+    // ----------------------
+    // Batch gradient descent
+    // ----------------------
+    NeuralNetwork nn_test(nn.H); // delete this and next line eventually 
     double my_tol = 1.0e-6; // no differences for tol greater than 1.0e1. start to get errors at 1.0e0
     for (int epoch = 0; epoch < epochs; ++epoch)
     {
-        int num_batches = (N + batch_size - 1) / batch_size;
-
         for (int batch = 0; batch < num_batches; ++batch)
         {
             /*
