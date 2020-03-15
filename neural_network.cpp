@@ -652,7 +652,6 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
     // Gradient descent
     NeuralNetwork nn_test(nn.H);
     double my_tol = 1.0e-6; // no differences for tol greater than 1.0e1. start to get errors at 1.0e0
-    bool tests = false; 
     for (int epoch = 0; epoch < epochs; ++epoch)
     {
         int num_batches = (N + batch_size - 1) / batch_size;
@@ -666,14 +665,22 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
              * 3. reduce the coefficient updates and broadcast to all nodes with `MPI_Allreduce()'
              * 4. update local network coefficient at each node
              */
+            bool tests = false;
+
             int my_N = my_X.n_cols;
             int last_col = std::min((batch + 1) * batch_size / num_procs - 1, my_N - 1);
-            arma::mat X_batch = my_X.cols(batch * batch_size / num_procs, last_col);
+            arma::mat X_batch = my_X.cols(batch * batch_size / num_procs, last_col); // columns at index (batch * batch_size / num_procs) to (last_col) inclusive
             arma::mat y_batch = my_y.cols(batch * batch_size / num_procs, last_col);
-            // printf("My rank is [%1d] and for this batch I work on columns %1d to %1d.\n", rank, batch * batch_size / num_procs, last_col);
+            printf("My rank is [%1d] and for this batch I start at column %1d and last_col is %1d.\n", rank, batch * batch_size / num_procs, last_col);
+            // int start = batch * batch_size + rank * batch_size/num_procs;
+            // last_col = std::min((batch + 1) * batch_size / num_procs - 1, N - 1);;
+            // int finish = last_col + start;
+            // printf("My rank is [%1d] and for this batch I start at column %1d and end at %1d and last_col is %1d.\n", rank, start, finish, last_col);
+            // arma::mat X_batch = X.cols(start, finish);
+            // arma::mat y_batch = y.cols(start, finish);
+            // exit(EXIT_FAILURE); // reaches here fine
 
             // std::cout << "rank and displs_x[rank]/X_n_rows is " << rank << " and " << displs_x[rank]/X_n_rows <<std::endl; // to see what part of X each process is starting from
-            // exit(EXIT_FAILURE); // reaches here fine
 
             // checkpoint 1: compare calculated minibatches to what they should be (obtained directly from X)
             if (batch==0 && tests){
@@ -1197,7 +1204,7 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
 
 
             // compare to gold standard acting on this batch
-            if (rank == 0 && batch==0 && num_procs==4 && test)
+            if (rank == 0 && batch==0 && num_procs==4 && tests)
             {
                 NeuralNetwork nn_test5(nn.H);
 
