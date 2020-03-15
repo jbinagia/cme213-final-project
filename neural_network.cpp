@@ -609,8 +609,11 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
     arma::mat my_X(X_n_rows, minibatch_size);
     arma::mat my_y(y_n_rows, minibatch_size);
     for (int batch = 0; batch < num_batches-1; ++batch){
-        MPI_Scatter(X.memptr(), X_n_rows * minibatch_size, MPI_DOUBLE, my_X.memptr(), X_n_rows * minibatch_size, MPI_DOUBLE, 0, MPI_COMM_WORLD);
-        MPI_Scatter(y.memptr(), y_n_rows * minibatch_size, MPI_DOUBLE, my_y.memptr(), y_n_rows * minibatch_size, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+        int last_col = std::min((batch + 1) * batch_size - 1, N - 1);
+        arma::mat X_batch = X.cols(batch * batch_size, last_col);
+        arma::mat y_batch = y.cols(batch * batch_size, last_col);
+        MPI_Scatter(X_batch.memptr(), X_n_rows * minibatch_size, MPI_DOUBLE, my_X.memptr(), X_n_rows * minibatch_size, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+        MPI_Scatter(y_batch.memptr(), y_n_rows * minibatch_size, MPI_DOUBLE, my_y.memptr(), y_n_rows * minibatch_size, MPI_DOUBLE, 0, MPI_COMM_WORLD);
         my_X_batches.push_back(my_X);
         my_y_batches.push_back(my_y);
     }
@@ -671,21 +674,8 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
              * 4. update local network coefficient at each node
              */
             bool tests = false;
-
-            int my_N = my_X.n_cols;
-            int last_col = std::min((batch + 1) * batch_size / num_procs - 1, my_N - 1);
-            arma::mat X_batch = my_X.cols(batch * batch_size / num_procs, last_col); // columns at index (batch * batch_size / num_procs) to (last_col) inclusive
-            arma::mat y_batch = my_y.cols(batch * batch_size / num_procs, last_col);
-            printf("My rank is [%1d] and for this batch I start at column %1d and last_col is %1d.\n", rank, batch * batch_size / num_procs, last_col);
-            // int start = batch * batch_size + rank * batch_size/num_procs;
-            // last_col = std::min((batch + 1) * batch_size / num_procs - 1, N - 1);;
-            // int finish = last_col + start;
-            // printf("My rank is [%1d] and for this batch I start at column %1d and end at %1d and last_col is %1d.\n", rank, start, finish, last_col);
-            // arma::mat X_batch = X.cols(start, finish);
-            // arma::mat y_batch = y.cols(start, finish);
-            // exit(EXIT_FAILURE); // reaches here fine
-
-            // std::cout << "rank and displs_x[rank]/X_n_rows is " << rank << " and " << displs_x[rank]/X_n_rows <<std::endl; // to see what part of X each process is starting from
+            arma::mat X_batch = my_X_batches[batch];
+            arma::mat y_batch = my_y_batches[batch];
 
             // checkpoint 1: compare calculated minibatches to what they should be (obtained directly from X)
             if (batch==0 && tests){
