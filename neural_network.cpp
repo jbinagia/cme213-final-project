@@ -714,6 +714,12 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
             }
 
             iter++;
+
+            // dellocate memory for global gradients
+            delete[] dW0;
+            delete[] dW1;
+            delete[] db0;
+            delete[] db1;
         }
     }
 
@@ -728,4 +734,10 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
     cudaFree(d_b1);
     cudaFree(d_db0);
     cudaFree(d_db1);
+
+    // dynamic memory deallocation
+    delete[] displs_x;
+    delete[] displs_y;
+    delete[] counts_x;
+    delete[] counts_y;
 }
