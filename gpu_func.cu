@@ -116,104 +116,106 @@ void gpuGEMM(const Matrix A, const Matrix B, Matrix C, double *B2, double *C2, d
     int myRowC = BLOCK_SIZE_Y*BLOCK_SIZE_X*blockIdx.y + linearIdx; // what row of A/C this thread is responsible for 
     // printf("my linearIdx and myRowC is: %d and %d\n",linearIdx,myRowC); // both these seem okay for the simple example 
 
-    // prevent row index of A/C from going out of bounds 
-    if (myRowC < M){
+    // // prevent row index of A/C from going out of bounds 
+    // if (myRowC < M){
 
-        // Each thread computes one 1xBLOCK_SIZE_X sub-matrix Csub of C
-        Matrix Csub = GetSubMatrix(C, myRowC, blockIdx.x, 1, BLOCK_SIZE_X);
-        // printf("[%d] my Csub when myRowC is %d: [%3.1f, %3.1f, %3.1f, %3.1f]\n",linearIdx, myRowC, Csub.elements[0], Csub.elements[1*Csub.height], Csub.elements[2*Csub.height], Csub.elements[3*Csub.height]); // this gives weird results!
-        // printf("[%d] my Csub when myRowC is %d: [%3.1f, %3.1f, %3.1f, %3.1f]\n",linearIdx, myRowC, Csub.elements[0], Csub.elements[1*M], Csub.elements[2*M], Csub.elements[3*M]); // cause the stride should still be M
-        // printf("[%d] my Csub when myRowC = %d, blockIdx.x = %d : [%5.4f, %5.4f, %5.4f, %5.4f]\n",linearIdx, myRowC, blockIdx.x, GetElement(Csub,0,0), GetElement(Csub,0,1), GetElement(Csub,0,2), GetElement(Csub,0,3)); // this works
-        // printf("[%d] my Csub when myRowC is %d: [%3.1f, %3.1f, %3.1f, %3.1f]\n",linearIdx, myRowC, C2[myRowC + M*0], C2[myRowC + M*1], C2[myRowC + M*2], C2[myRowC + M*3]); // this works
-        // printMatrix(Csub);
-        // these look good 
+    // Determine Csub_ncols, i.e. number of columns of Bsub we will actually utilize
+    int nom_last_col_B = BLOCK_SIZE_X*(blockIdx.x + 1) - 1; // last column of B we will nominally consider
+    int Csub_ncols = nom_last_col_B <= N-1 ? BLOCK_SIZE_X : (N - BLOCK_SIZE_X*(blockIdx.x)); // this prevents column index of C/B from going out of bounds
+    // printf("[%d] my nom_last_colB and Csub_ncols are: %d and %d\n",linearIdx,nom_last_col_B,Csub_ncols); // all seem right for simple case
 
-        // Determine Csub_ncols, i.e. number of columns of Bsub we will actually utilize
-        int nom_last_col_B = BLOCK_SIZE_X*(blockIdx.x + 1) - 1; // last column of B we will nominally consider
-        int Csub_ncols = nom_last_col_B <= N-1 ? BLOCK_SIZE_X : (N - BLOCK_SIZE_X*(blockIdx.x)); // this prevents column index of C/B from going out of bounds
-        // printf("[%d] my nom_last_colB and Csub_ncols are: %d and %d\n",linearIdx,nom_last_col_B,Csub_ncols); // all seem right for simple case
+    // Shared memory used to store Bsub 
+    __shared__ double Bs[BLOCK_SIZE_Y][BLOCK_SIZE_X]; // 2d array 
 
-        // Shared memory used to store Bsub 
-        __shared__ double Bs[BLOCK_SIZE_Y][BLOCK_SIZE_X]; // 2d array 
+    // for each iteration, load l-th 4xCsub_ncols chunk of B into shared memory 
+    int num_iters = K%BLOCK_SIZE_Y==0 ? K/BLOCK_SIZE_Y : K/BLOCK_SIZE_Y + 1; // if number of rows of B isn't divisible by K, we need to do one extra iteration with less rows of B 
+    // printf("[%d] num_iters is: %d\n", linearIdx,num_iters); // seems right for simple case
+    for (int l = 0; l < num_iters; l++){
+        // each thread multiplies 1xBLOCK_SIZE_Y chunk of Asub with BLOCK_SIZE_Yx Csub_ncols Bsub (which is in shared memory) to 
+        // compute contribution to a 1xCsub_ncols chunk of Csub
 
-        // for each iteration, load l-th 4xCsub_ncols chunk of B into shared memory 
-        int num_iters = K%BLOCK_SIZE_Y==0 ? K/BLOCK_SIZE_Y : K/BLOCK_SIZE_Y + 1; // if number of rows of B isn't divisible by K, we need to do one extra iteration with less rows of B 
-        // printf("[%d] num_iters is: %d\n", linearIdx,num_iters); // seems right for simple case
-        for (int l = 0; l < num_iters; l++){
-            // each thread multiplies 1xBLOCK_SIZE_Y chunk of Asub with BLOCK_SIZE_Yx Csub_ncols Bsub (which is in shared memory) to 
-            // compute contribution to a 1xCsub_ncols chunk of Csub
+        // Calculate number of rows of B to actually read from. Bsub_nrows < BLOCK_SIZE_Y if K not divisible by BLOCK_SIZE_Y and on final iteration 
+        int Bsub_nrows =  (K%BLOCK_SIZE_Y!=0 && l==num_iters-1) ? (K - BLOCK_SIZE_Y*l) :  BLOCK_SIZE_Y;  
+        // if (linearIdx==0){ // all seem good for simple example 
+        //     printf("[l=%d] Bsub_nrows is: %d\n",l,Bsub_nrows); 
+        // }
 
-            // Calculate number of rows of B to actually read from. Bsub_nrows < BLOCK_SIZE_Y if K not divisible by BLOCK_SIZE_Y and on final iteration 
-            int Bsub_nrows =  (K%BLOCK_SIZE_Y!=0 && l==num_iters-1) ? (K - BLOCK_SIZE_Y*l) :  BLOCK_SIZE_Y;  
-            // if (linearIdx==0){ // all seem good for simple example 
-            //     printf("[l=%d] Bsub_nrows is: %d\n",l,Bsub_nrows); 
+        // Get sub-matrix Bsub of B
+        Matrix Bsub = GetSubMatrix(B, l, blockIdx.x, BLOCK_SIZE_Y, BLOCK_SIZE_X);
+        // if (linearIdx==0){ // this looks good 
+        //     // printf("Bsub should have %d rows and %d columns\n", BLOCK_SIZE_Y, Csub_ncols);
+        //     printf("[%d] Bsub[0,:] for l = %d, blockIdx.x = %d, is [%3.1f, %3.1f, %3.1f, %3.1f]\n",linearIdx, l, blockIdx.x, GetElement(Bsub,0,0), GetElement(Bsub,0,1), GetElement(Bsub,0,2), GetElement(Bsub,0,3));
+        //     printf("[%d] Bsub[1,:] for l = %d, blockIdx.x = %d, is [%3.1f, %3.1f, %3.1f, %3.1f]\n",linearIdx, l, blockIdx.x, GetElement(Bsub,1,0), GetElement(Bsub,1,1), GetElement(Bsub,1,2), GetElement(Bsub,1,3));
+        //     printf("[%d] Bsub[2,:] for l = %d, blockIdx.x = %d, is [%3.1f, %3.1f, %3.1f, %3.1f]\n",linearIdx, l, blockIdx.x, GetElement(Bsub,2,0), GetElement(Bsub,2,1), GetElement(Bsub,2,2), GetElement(Bsub,2,3));
+        //     printf("[%d] Bsub[3,:] for l = %d, blockIdx.x = %d, is [%3.1f, %3.1f, %3.1f, %3.1f]\n",linearIdx, l, blockIdx.x, GetElement(Bsub,3,0), GetElement(Bsub,3,1), GetElement(Bsub,3,2), GetElement(Bsub,3,3));
+        // }
+
+
+        // Thread row and column within Bsub
+        int row = threadIdx.y;
+        int col = threadIdx.x;
+        // if (l==0){ // all seem good for simple case
+        //     printf("[%d] my row and column in Bsub is %d and %d\n",linearIdx,row,col); 
+        // }
+
+        // Now each thread retrieves a 1 x BLOCK_SIZE_X chunk of A (we only need 1 x Bsub_nrows of it)
+        double a[BLOCK_SIZE_X]; // local 1 x BLOCK_SIZE_X array 
+
+        // prevent row index of B / column index of A from going out of bounds
+        int row_in_B = row + l*BLOCK_SIZE_Y; 
+        int column_in_B = col + blockIdx.x*BLOCK_SIZE_X; // this prevents column index of C/B from going out of bounds
+        // printf("[%d] my row and column in B is %d and %d\n",linearIdx,row_in_B, column_in_B); // all seem normal 
+        if (row_in_B < K && column_in_B < N){
+
+            // Load Bsub from device memory to shared memory
+            // Each thread loads one element of each sub-matrix
+            Bs[row][col] = GetElement(Bsub, row, col);
+        }
+
+        // Get sub-matrix Bsub of B
+        Matrix Asub = GetSubMatrix(A, myRowC, l, 1, BLOCK_SIZE_X);
+        // if (linearIdx==15){ // this looks good 
+        //     printf("[%d] Asub[0,:] for l = %d is [%3.1f, %3.1f, %3.1f, %3.1f]\n",linearIdx, l, GetElement(Asub,0,0), GetElement(Asub,0,1), GetElement(Asub,0,2), GetElement(Asub,0,3));
+        // }
+
+        // fill up local array a 
+        for (int m = 0; m < Bsub_nrows; m++){
+            // int my_col = l*BLOCK_SIZE_Y + m; // stride is BLOCK_SIZE_Y = 4
+            // if (my_col >=K){
+            //     printf("[%d] I am trying to access column %d because l = %d, m = %d, BLOCK_SIZE_Y = %d\n",linearIdx, my_col, l, m, BLOCK_SIZE_Y); 
             // }
+            // assert(my_col < K); // check that index is valid
+            // assert(M*my_col + myRowC < M*K); // check that index is not out of bounds
+            // a[m] = A.elements[M*my_col + myRowC]; // old assignment 
+            a[m] = GetElement(Asub,0,m);
+        }
+        
 
-            // Get sub-matrix Bsub of B
-            Matrix Bsub = GetSubMatrix(B, l, blockIdx.x, BLOCK_SIZE_Y, BLOCK_SIZE_X);
-            // if (linearIdx==0){ // this looks good 
-            //     // printf("Bsub should have %d rows and %d columns\n", BLOCK_SIZE_Y, Csub_ncols);
-            //     printf("[%d] Bsub[0,:] for l = %d, blockIdx.x = %d, is [%3.1f, %3.1f, %3.1f, %3.1f]\n",linearIdx, l, blockIdx.x, GetElement(Bsub,0,0), GetElement(Bsub,0,1), GetElement(Bsub,0,2), GetElement(Bsub,0,3));
-            //     printf("[%d] Bsub[1,:] for l = %d, blockIdx.x = %d, is [%3.1f, %3.1f, %3.1f, %3.1f]\n",linearIdx, l, blockIdx.x, GetElement(Bsub,1,0), GetElement(Bsub,1,1), GetElement(Bsub,1,2), GetElement(Bsub,1,3));
-            //     printf("[%d] Bsub[2,:] for l = %d, blockIdx.x = %d, is [%3.1f, %3.1f, %3.1f, %3.1f]\n",linearIdx, l, blockIdx.x, GetElement(Bsub,2,0), GetElement(Bsub,2,1), GetElement(Bsub,2,2), GetElement(Bsub,2,3));
-            //     printf("[%d] Bsub[3,:] for l = %d, blockIdx.x = %d, is [%3.1f, %3.1f, %3.1f, %3.1f]\n",linearIdx, l, blockIdx.x, GetElement(Bsub,3,0), GetElement(Bsub,3,1), GetElement(Bsub,3,2), GetElement(Bsub,3,3));
-            // }
+        // Synchronize to make sure the sub-matrices are loaded
+        // before starting the computation
+        __syncthreads();
 
+        // check local a 
+        // printf("[%d] My local a is: [%3.1f, %3.1f, %3.1f, %3.1f]\n",linearIdx, a[0], a[1], a[2], a[3]); // still not right
 
-            // Thread row and column within Bsub
-            int row = threadIdx.y;
-            int col = threadIdx.x;
-            // if (l==0){ // all seem good for simple case
-            //     printf("[%d] my row and column in Bsub is %d and %d\n",linearIdx,row,col); 
-            // }
+        // check shared Bsub
+        // if (linearIdx==0){ // this looks good 
+        //     printf("[%d] Bsub[0,:] for l = %d is [%3.1f, %3.1f, %3.1f, %3.1f]\n",linearIdx, l, Bs[0][0], Bs[0][1], Bs[0][2], Bs[0][3]);
+        //     printf("[%d] Bsub[1,:] for l = %d is [%3.1f, %3.1f, %3.1f, %3.1f]\n",linearIdx, l, Bs[1][0], Bs[1][1], Bs[1][2], Bs[1][3]);
+        //     printf("[%d] Bsub[2,:] for l = %d is [%3.1f, %3.1f, %3.1f, %3.1f]\n",linearIdx, l, Bs[2][0], Bs[2][1], Bs[2][2], Bs[2][3]);
+        //     printf("[%d] Bsub[3,:] for l = %d is [%3.1f, %3.1f, %3.1f, %3.1f]\n",linearIdx, l, Bs[3][0], Bs[3][1], Bs[3][2], Bs[3][3]);
+        // }
+        // prevent row index of A/C from going out of bounds 
+        if (myRowC < M){
 
-            // Now each thread retrieves a 1 x BLOCK_SIZE_X chunk of A (we only need 1 x Bsub_nrows of it)
-            double a[BLOCK_SIZE_X]; // local 1 x BLOCK_SIZE_X array 
-
-            // prevent row index of B / column index of A from going out of bounds
-            int row_in_B = row + l*BLOCK_SIZE_Y; 
-            int column_in_B = col + blockIdx.x*BLOCK_SIZE_X; // this prevents column index of C/B from going out of bounds
-            // printf("[%d] my row and column in B is %d and %d\n",linearIdx,row_in_B, column_in_B); // all seem normal 
-            if (row_in_B < K && column_in_B < N){
-
-                // Load Bsub from device memory to shared memory
-                // Each thread loads one element of each sub-matrix
-                Bs[row][col] = GetElement(Bsub, row, col);
-            }
-
-            // Get sub-matrix Bsub of B
-            Matrix Asub = GetSubMatrix(A, myRowC, l, 1, BLOCK_SIZE_X);
-            // if (linearIdx==15){ // this looks good 
-            //     printf("[%d] Asub[0,:] for l = %d is [%3.1f, %3.1f, %3.1f, %3.1f]\n",linearIdx, l, GetElement(Asub,0,0), GetElement(Asub,0,1), GetElement(Asub,0,2), GetElement(Asub,0,3));
-            // }
-
-            // fill up local array a 
-            for (int m = 0; m < Bsub_nrows; m++){
-                // int my_col = l*BLOCK_SIZE_Y + m; // stride is BLOCK_SIZE_Y = 4
-                // if (my_col >=K){
-                //     printf("[%d] I am trying to access column %d because l = %d, m = %d, BLOCK_SIZE_Y = %d\n",linearIdx, my_col, l, m, BLOCK_SIZE_Y); 
-                // }
-                // assert(my_col < K); // check that index is valid
-                // assert(M*my_col + myRowC < M*K); // check that index is not out of bounds
-                // a[m] = A.elements[M*my_col + myRowC]; // old assignment 
-                a[m] = GetElement(Asub,0,m);
-            }
-            
-
-            // Synchronize to make sure the sub-matrices are loaded
-            // before starting the computation
-            __syncthreads();
-
-            // check local a 
-            // printf("[%d] My local a is: [%3.1f, %3.1f, %3.1f, %3.1f]\n",linearIdx, a[0], a[1], a[2], a[3]); // still not right
-
-            // check shared Bsub
-            // if (linearIdx==0){ // this looks good 
-            //     printf("[%d] Bsub[0,:] for l = %d is [%3.1f, %3.1f, %3.1f, %3.1f]\n",linearIdx, l, Bs[0][0], Bs[0][1], Bs[0][2], Bs[0][3]);
-            //     printf("[%d] Bsub[1,:] for l = %d is [%3.1f, %3.1f, %3.1f, %3.1f]\n",linearIdx, l, Bs[1][0], Bs[1][1], Bs[1][2], Bs[1][3]);
-            //     printf("[%d] Bsub[2,:] for l = %d is [%3.1f, %3.1f, %3.1f, %3.1f]\n",linearIdx, l, Bs[2][0], Bs[2][1], Bs[2][2], Bs[2][3]);
-            //     printf("[%d] Bsub[3,:] for l = %d is [%3.1f, %3.1f, %3.1f, %3.1f]\n",linearIdx, l, Bs[3][0], Bs[3][1], Bs[3][2], Bs[3][3]);
-            // }
+            // Each thread computes one 1xBLOCK_SIZE_X sub-matrix Csub of C
+            Matrix Csub = GetSubMatrix(C, myRowC, blockIdx.x, 1, BLOCK_SIZE_X);
+            // printf("[%d] my Csub when myRowC is %d: [%3.1f, %3.1f, %3.1f, %3.1f]\n",linearIdx, myRowC, Csub.elements[0], Csub.elements[1*Csub.height], Csub.elements[2*Csub.height], Csub.elements[3*Csub.height]); // this gives weird results!
+            // printf("[%d] my Csub when myRowC is %d: [%3.1f, %3.1f, %3.1f, %3.1f]\n",linearIdx, myRowC, Csub.elements[0], Csub.elements[1*M], Csub.elements[2*M], Csub.elements[3*M]); // cause the stride should still be M
+            // printf("[%d] my Csub when myRowC = %d, blockIdx.x = %d : [%5.4f, %5.4f, %5.4f, %5.4f]\n",linearIdx, myRowC, blockIdx.x, GetElement(Csub,0,0), GetElement(Csub,0,1), GetElement(Csub,0,2), GetElement(Csub,0,3)); // this works
+            // printf("[%d] my Csub when myRowC is %d: [%3.1f, %3.1f, %3.1f, %3.1f]\n",linearIdx, myRowC, C2[myRowC + M*0], C2[myRowC + M*1], C2[myRowC + M*2], C2[myRowC + M*3]); // this works
+            // printMatrix(Csub);
+            // these look good 
 
             // Multiply a and Bsub together
             // if (l==0) printf("[%d] Csub.stride is %d and it should be %d \n", linearIdx, Csub.stride, M); // this is correct 
@@ -243,18 +245,15 @@ void gpuGEMM(const Matrix A, const Matrix B, Matrix C, double *B2, double *C2, d
                     // Try accessing B directly? nope - same exact error actually.   
                 }
             }
-
-            // Synchronize to make sure that the preceding
-            // computation is done before loading two new
-            // sub-matrices of A and B in the next iteration
-            __syncthreads();
         }
 
-        
-        // if (i == 0 && j==0){
-        //     printf("%d and %d\n", K/4, (K+1)/4); 
-        // }
+        // Synchronize to make sure that the preceding
+        // computation is done before loading two new
+        // sub-matrices of A and B in the next iteration
+        __syncthreads();
     }
+
+    // }
 }
 
 __global__
