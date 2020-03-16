@@ -102,13 +102,14 @@ void gpuGEMM(const Matrix A, const Matrix B, Matrix C, double *B2, double *C2, d
 
     // Print A, B, C for debugging
     // if (threadIdx.x == 0 && threadIdx.y == 0 && blockIdx.x==0 && blockIdx.y==0){
-    //     printf("A: \n");
-    //     printMatrix(A); 
-    //     printf("B: \n");
-    //     printMatrix(B); 
+    //     // printf("A: \n");
+    //     // printMatrix(A); 
+    //     // printf("B: \n");
+    //     // printMatrix(B); 
     //     printf("C: \n");
     //     printMatrix(C); 
     // }
+
 
     // Useful definitions
     int linearIdx = threadIdx.x * BLOCK_SIZE_Y + threadIdx.y;  // map each thread to a int between 0 and BLOCK_SIZE_Y*BLOCK_SIZE_X
@@ -122,10 +123,10 @@ void gpuGEMM(const Matrix A, const Matrix B, Matrix C, double *B2, double *C2, d
         Matrix Csub = GetSubMatrix(C, myRowC, blockIdx.x, 1, BLOCK_SIZE_X);
         // printf("[%d] my Csub when myRowC is %d: [%3.1f, %3.1f, %3.1f, %3.1f]\n",linearIdx, myRowC, Csub.elements[0], Csub.elements[1*Csub.height], Csub.elements[2*Csub.height], Csub.elements[3*Csub.height]); // this gives weird results!
         // printf("[%d] my Csub when myRowC is %d: [%3.1f, %3.1f, %3.1f, %3.1f]\n",linearIdx, myRowC, Csub.elements[0], Csub.elements[1*M], Csub.elements[2*M], Csub.elements[3*M]); // cause the stride should still be M
-        // printf("[%d] my Csub when myRowC is %d: [%3.1f, %3.1f, %3.1f, %3.1f]\n",linearIdx, myRowC, GetElement(Csub,0,0), GetElement(Csub,0,1), GetElement(Csub,0,2), GetElement(Csub,0,3)); // this works
+        // printf("[%d] my Csub when myRowC = %d, blockIdx.x = %d : [%5.4f, %5.4f, %5.4f, %5.4f]\n",linearIdx, myRowC, blockIdx.x, GetElement(Csub,0,0), GetElement(Csub,0,1), GetElement(Csub,0,2), GetElement(Csub,0,3)); // this works
         // printf("[%d] my Csub when myRowC is %d: [%3.1f, %3.1f, %3.1f, %3.1f]\n",linearIdx, myRowC, C2[myRowC + M*0], C2[myRowC + M*1], C2[myRowC + M*2], C2[myRowC + M*3]); // this works
         // printMatrix(Csub);
-        // well, in that case Csub and the way we call it further below should be fine 
+        // these look good 
 
         // Determine Csub_ncols, i.e. number of columns of Bsub we will actually utilize
         int nom_last_col_B = BLOCK_SIZE_X*(blockIdx.x + 1) - 1; // last column of B we will nominally consider
@@ -149,13 +150,13 @@ void gpuGEMM(const Matrix A, const Matrix B, Matrix C, double *B2, double *C2, d
             // }
 
             // Get sub-matrix Bsub of B
-            Matrix Bsub = GetSubMatrix(B, l, blockIdx.x, BLOCK_SIZE_Y, Csub_ncols);
+            Matrix Bsub = GetSubMatrix(B, l, blockIdx.x, BLOCK_SIZE_Y, BLOCK_SIZE_X);
             // if (linearIdx==0){ // this looks good 
-            //     printf("Bsub should have %d rows and %d columns\n", BLOCK_SIZE_Y, Csub_ncols);
-            //     printf("[%d] Bsub[0,:] for l = %d is [%3.1f, %3.1f, %3.1f, %3.1f]\n",linearIdx, l,GetElement(Bsub,0,0), GetElement(Bsub,0,1), GetElement(Bsub,0,2), GetElement(Bsub,0,3));
-            //     printf("[%d] Bsub[1,:] for l = %d is [%3.1f, %3.1f, %3.1f, %3.1f]\n",linearIdx, l,GetElement(Bsub,1,0), GetElement(Bsub,1,1), GetElement(Bsub,1,2), GetElement(Bsub,1,3));
-            //     printf("[%d] Bsub[2,:] for l = %d is [%3.1f, %3.1f, %3.1f, %3.1f]\n",linearIdx, l,GetElement(Bsub,2,0), GetElement(Bsub,2,1), GetElement(Bsub,2,2), GetElement(Bsub,2,3));
-            //     printf("[%d] Bsub[3,:] for l = %d is [%3.1f, %3.1f, %3.1f, %3.1f]\n",linearIdx, l,GetElement(Bsub,3,0), GetElement(Bsub,3,1), GetElement(Bsub,3,2), GetElement(Bsub,3,3));
+            //     // printf("Bsub should have %d rows and %d columns\n", BLOCK_SIZE_Y, Csub_ncols);
+            //     printf("[%d] Bsub[0,:] for l = %d, blockIdx.x = %d, is [%3.1f, %3.1f, %3.1f, %3.1f]\n",linearIdx, l, blockIdx.x, GetElement(Bsub,0,0), GetElement(Bsub,0,1), GetElement(Bsub,0,2), GetElement(Bsub,0,3));
+            //     printf("[%d] Bsub[1,:] for l = %d, blockIdx.x = %d, is [%3.1f, %3.1f, %3.1f, %3.1f]\n",linearIdx, l, blockIdx.x, GetElement(Bsub,1,0), GetElement(Bsub,1,1), GetElement(Bsub,1,2), GetElement(Bsub,1,3));
+            //     printf("[%d] Bsub[2,:] for l = %d, blockIdx.x = %d, is [%3.1f, %3.1f, %3.1f, %3.1f]\n",linearIdx, l, blockIdx.x, GetElement(Bsub,2,0), GetElement(Bsub,2,1), GetElement(Bsub,2,2), GetElement(Bsub,2,3));
+            //     printf("[%d] Bsub[3,:] for l = %d, blockIdx.x = %d, is [%3.1f, %3.1f, %3.1f, %3.1f]\n",linearIdx, l, blockIdx.x, GetElement(Bsub,3,0), GetElement(Bsub,3,1), GetElement(Bsub,3,2), GetElement(Bsub,3,3));
             // }
 
 
@@ -411,7 +412,7 @@ int myGEMM(double* A, double* B,
     dim3 threadsPerBlock(BLOCK_SIZE_X, BLOCK_SIZE_Y);  // 64 threads per block 
     int num_blocks_x = (N + threadsPerBlock.x - 1)/threadsPerBlock.x; // N is number of columns of C
     int num_blocks_y = (M + threadsPerBlock.x*threadsPerBlock.y - 1)/threadsPerBlock.x/threadsPerBlock.y; // M is number of rows of C
-    std::cout << num_blocks_x << " and " << num_blocks_y << std::endl; // makes sense for simple cases now 
+    // std::cout << num_blocks_x << " and " << num_blocks_y << std::endl; // makes sense for simple cases now 
     dim3 numBlocks(num_blocks_x, num_blocks_y); 
 
     // Define A, B, C as matrices to faciliate computation

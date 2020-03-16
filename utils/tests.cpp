@@ -211,6 +211,14 @@ void TestGEMM(int M, int N, int K) {
                   std::endl;
     }
 
+    // Jeremy edit
+    arma::mat myA(A, M, K);
+    myA.print("A: ");
+    arma::mat myB(B, K, N);
+    myB.print("B: ");
+    arma::mat myC(C2, M, N);
+    myC.print("C: ");
+
     cudaMemcpy(C2, dC2, sizeof(double) * M * N, cudaMemcpyDeviceToHost);
 
     /* We are calling your GEMM function here */
@@ -270,9 +278,7 @@ void BenchmarkGEMM() {
     // int M = 800*SCALE, N = 1000*SCALE, K = 784*SCALE;
     // int M = 64 * SCALE, N = 16 * SCALE, K = 4 * SCALE; // Jeremy edit
     // int M = 16 * SCALE, N = 4 * SCALE, K = 4 * SCALE; // Jeremy edit
-    // int M = 16 * SCALE, N = 5 * SCALE, K = 4 * SCALE; // does not work (testing N is not divisible by 4)
-    int M = 16 * SCALE, N = 4 * SCALE, K = 5 * SCALE; // does not work (testing K is not divisible by 4)
-    // int M = 17 * SCALE, N = 4 * SCALE, K = 4 * SCALE; // does not work (testing M is not divisible by 4)
+    int M = 17 * SCALE, N = 4 * SCALE, K = 4 * SCALE; // does not work (testing M is not divisible by 4)
 
     std::cout << std::endl << "Starting GEMM 1: " << "M = " << M << "; N = "
               << N << "; K = " << K << std::endl;
