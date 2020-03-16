@@ -6,6 +6,11 @@
 #include "cublas_v2.h"
 #include "utils/common.h"
 
+// Thread block size for myGEMM
+// #define BLOCK_SIZE_X 16
+#define BLOCK_SIZE_X 4
+#define BLOCK_SIZE_Y 4
+
 __global__
 void device_add_one(int* d_result, int t) {
     *d_result = t + 1;
@@ -34,8 +39,217 @@ int useless_gpu_add_one(int t) {
     return result;
 }
 
+// Define struct for facilitating computations in gpuGEMM
+    // - idea for Matrix, GetElement(), SetElement(), and GetSubMatrix() came from CUDA C++ Programming Guide
+    // - Note here matrices are stored in column-major order:
+    // - I.e. M(row, col) = *(M.elements + col * M.stride + row)
+typedef struct {
+    int width;
+    int height;
+    int stride;
+    double* elements;
+} Matrix;
+
+// Define function for retrieving element of matrix 
+__device__ 
+double GetElement(const Matrix A, int row, int col)
+{
+    return A.elements[col * A.stride + row];
+}
+
+// Set a matrix element
+__device__ 
+void SetElement(Matrix A, int row, int col, double value)
+{
+    A.elements[col * A.stride + row] = value;
+}
+
+// To use for debugging
+__device__
+void printMatrix(Matrix A)
+{
+    int M = A.height;
+    int N = A.width; 
+    // printf("new matrix now\n");
+    for (int i = 0; i < M; i++){
+        printf("[");
+        for (int j = 0; j < N; j++){
+            double value = GetElement(A, i, j); 
+            printf("%3.1f, ", value);
+        }
+        printf("]\n");
+    }
+}
+
+// Get the BLOCK_SIZExCsub_ncols sub-matrix Bsub of B that is
+// located col sub-matrices to the right and row sub-matrices down
+// from the upper-left corner of B
+__device__ 
+Matrix GetSubMatrix(Matrix B, int row, int col, int height, int width)
+{
+    Matrix Bsub;
+    Bsub.height = height;
+    Bsub.width = width;
+    Bsub.stride = B.stride;
+    Bsub.elements = &B.elements[B.stride * width * col + height * row];
+    return Bsub;
+}
+
+
 __global__
-void gpuGEMM(double* __restrict__ A, double* __restrict__ B,
+void gpuGEMM(const Matrix A, const Matrix B, Matrix C, double *B2, double *C2, double alpha, double beta,
+           int M, int N, int K) {
+
+    // Print A, B, C for debugging
+    // if (threadIdx.x == 0 && threadIdx.y == 0 && blockIdx.x==0 && blockIdx.y==0){
+    //     printf("A: \n");
+    //     printMatrix(A); 
+    //     printf("B: \n");
+    //     printMatrix(B); 
+    //     printf("C: \n");
+    //     printMatrix(C); 
+    // }
+
+    // Useful definitions
+    int linearIdx = threadIdx.x * BLOCK_SIZE_Y + threadIdx.y;  // map each thread to a int between 0 and BLOCK_SIZE_Y*BLOCK_SIZE_X
+    int myRowC = BLOCK_SIZE_Y*BLOCK_SIZE_X*blockIdx.y + linearIdx; // what row of A/C this thread is responsible for 
+    // printf("my linearIdx and myRowC is: %d and %d\n",linearIdx,myRowC); // both these seem okay for the simple example 
+
+    // prevent row index of A/C from going out of bounds 
+    if (myRowC < M){
+
+        // Each thread computes one 1xBLOCK_SIZE_X sub-matrix Csub of C
+        Matrix Csub = GetSubMatrix(C, myRowC, blockIdx.x, 1, BLOCK_SIZE_X);
+        // printf("[%d] my Csub when myRowC is %d: [%3.1f, %3.1f, %3.1f, %3.1f]\n",linearIdx, myRowC, Csub.elements[0], Csub.elements[1*Csub.height], Csub.elements[2*Csub.height], Csub.elements[3*Csub.height]); // this gives weird results!
+        // printf("[%d] my Csub when myRowC is %d: [%3.1f, %3.1f, %3.1f, %3.1f]\n",linearIdx, myRowC, Csub.elements[0], Csub.elements[1*M], Csub.elements[2*M], Csub.elements[3*M]); // cause the stride should still be M
+        // printf("[%d] my Csub when myRowC is %d: [%3.1f, %3.1f, %3.1f, %3.1f]\n",linearIdx, myRowC, GetElement(Csub,0,0), GetElement(Csub,0,1), GetElement(Csub,0,2), GetElement(Csub,0,3)); // this works
+        // printf("[%d] my Csub when myRowC is %d: [%3.1f, %3.1f, %3.1f, %3.1f]\n",linearIdx, myRowC, C2[myRowC + M*0], C2[myRowC + M*1], C2[myRowC + M*2], C2[myRowC + M*3]); // this works
+        // printMatrix(Csub);
+        // well, in that case Csub and the way we call it further below should be fine 
+
+        // Determine Csub_ncols, i.e. number of columns of Bsub we will actually utilize
+        int nom_last_col_B = BLOCK_SIZE_X*(blockIdx.x + 1) - 1; // last column of B we will nominally consider
+        int Csub_ncols = nom_last_col_B <= N-1 ? BLOCK_SIZE_X : (N - BLOCK_SIZE_X*(blockIdx.x)); // this prevents column index of C/B from going out of bounds
+        // printf("[%d] my nom_last_colB and Csub_ncols are: %d and %d\n",linearIdx,nom_last_col_B,Csub_ncols); // all seem right for simple case
+
+        // for each iteration, load l-th 4xCsub_ncols chunk of B into shared memory 
+        int num_iters = K%BLOCK_SIZE_Y==0 ? K/BLOCK_SIZE_Y : K/BLOCK_SIZE_Y + 1; // if number of rows of B isn't divisible by K, we need to do one extra iteration with less rows of B 
+        // printf("[%d] num_iters is: %d\n", linearIdx,num_iters); // seems right for simple case
+        for (int l = 0; l < num_iters; l++){
+            // each thread multiplies 1xBLOCK_SIZE_Y chunk of Asub with BLOCK_SIZE_Yx Csub_ncols Bsub (which is in shared memory) to 
+            // compute contribution to a 1xCsub_ncols chunk of Csub
+
+            // Calculate number of rows of B to actually read from. Bsub_nrows < BLOCK_SIZE_Y if K not divisible by BLOCK_SIZE_Y and on final iteration 
+            int Bsub_nrows =  (K%BLOCK_SIZE_Y!=0 && l==num_iters-1) ? (K - BLOCK_SIZE_Y*(blockIdx.y)) :  BLOCK_SIZE_Y;  
+            // if (linearIdx==0){ // all seem good for simple example 
+            //     printf("[l=%d] Bsub_nrows is: %d\n",l,Bsub_nrows); 
+            // }
+
+            // Get sub-matrix Bsub of B
+            Matrix Bsub = GetSubMatrix(B, l, blockIdx.x, Bsub_nrows, Csub_ncols);
+            // if (linearIdx==0){ // this looks good 
+            //     printf("[%d] Bsub[0,:] for l = %d is [%3.1f, %3.1f, %3.1f, %3.1f]\n",linearIdx, l,GetElement(Bsub,0,0), GetElement(Bsub,0,1), GetElement(Bsub,0,2), GetElement(Bsub,0,3));
+            //     printf("[%d] Bsub[1,:] for l = %d is [%3.1f, %3.1f, %3.1f, %3.1f]\n",linearIdx, l,GetElement(Bsub,1,0), GetElement(Bsub,1,1), GetElement(Bsub,1,2), GetElement(Bsub,1,3));
+            //     printf("[%d] Bsub[2,:] for l = %d is [%3.1f, %3.1f, %3.1f, %3.1f]\n",linearIdx, l,GetElement(Bsub,2,0), GetElement(Bsub,2,1), GetElement(Bsub,2,2), GetElement(Bsub,2,3));
+            //     printf("[%d] Bsub[3,:] for l = %d is [%3.1f, %3.1f, %3.1f, %3.1f]\n",linearIdx, l,GetElement(Bsub,3,0), GetElement(Bsub,3,1), GetElement(Bsub,3,2), GetElement(Bsub,3,3));
+            // }
+
+            // Shared memory used to store Bsub 
+            __shared__ double Bs[BLOCK_SIZE_Y][BLOCK_SIZE_X]; // 2d array 
+
+            // Thread row and column within Bsub
+            int row = threadIdx.y;
+            int col = threadIdx.x;
+            // if (l==0){ // all seem good for simple case
+            //     printf("[%d] my row and column in Bsub is %d and %d\n",linearIdx,row,col); 
+            // }
+
+            // Now each thread retrieves a 1 x BLOCK_SIZE_X chunk of A (we only need 1 x Bsub_nrows of it)
+            double a[BLOCK_SIZE_X]; // local 1 x BLOCK_SIZE_X array 
+
+            // prevent row index of B / column index of A from going out of bounds
+            int row_in_B = row + l*BLOCK_SIZE_Y; 
+            int column_in_B = col + blockIdx.x*BLOCK_SIZE_X; // this prevents column index of C/B from going out of bounds
+            // printf("[%d] my row and column in B is %d and %d\n",linearIdx,row_in_B, column_in_B); // all seem normal 
+            if (row_in_B < K && column_in_B < N){
+
+                // Load Bsub from device memory to shared memory
+                // Each thread loads one element of each sub-matrix
+                Bs[row][col] = GetElement(Bsub, row, col);
+
+                // fill up local array a 
+                for (int m = 0; m < Bsub_nrows; m++){
+                    int my_col = l*BLOCK_SIZE_Y + m; // stride is BLOCK_SIZE_Y = 4
+                    assert(my_col < K); // check that index is valid
+                    assert(M*my_col + myRowC < M*K); // check that index is not out of bounds
+                    if (my_col >=K){
+                        printf("[%d] I am trying to access column %d\n",linearIdx, my_col); 
+                    }
+                    a[m] = A.elements[M*my_col + myRowC]; 
+                }
+            }
+
+            // Synchronize to make sure the sub-matrices are loaded
+            // before starting the computation
+            __syncthreads();
+
+            // check local a 
+            // printf("[%d] My local a is: [%3.1f, %3.1f, %3.1f, %3.1f]\n",linearIdx, a[0], a[1], a[2], a[3]); // looks good here
+
+            // check shared Bsub
+            // if (linearIdx==0){ // this looks good 
+            //     printf("[%d] Bsub[0,:] for l = %d is [%3.1f, %3.1f, %3.1f, %3.1f]\n",linearIdx, l, Bs[0][0], Bs[0][1], Bs[0][2], Bs[0][3]);
+            //     printf("[%d] Bsub[1,:] for l = %d is [%3.1f, %3.1f, %3.1f, %3.1f]\n",linearIdx, l, Bs[1][0], Bs[1][1], Bs[1][2], Bs[1][3]);
+            //     printf("[%d] Bsub[2,:] for l = %d is [%3.1f, %3.1f, %3.1f, %3.1f]\n",linearIdx, l, Bs[2][0], Bs[2][1], Bs[2][2], Bs[2][3]);
+            //     printf("[%d] Bsub[3,:] for l = %d is [%3.1f, %3.1f, %3.1f, %3.1f]\n",linearIdx, l, Bs[3][0], Bs[3][1], Bs[3][2], Bs[3][3]);
+            // }
+
+            // Multiply a and Bsub together
+            // if (l==0) printf("[%d] Csub.stride is %d and it should be %d \n", linearIdx, Csub.stride, M); // this is correct 
+            if (row_in_B < K){
+                for (int k = 0; k < Csub_ncols; k++){ // for each column in Csub. this prevents column index of C/B from going out of bounds
+                    // for each column, we are basically accumulating into the k-th column of my Csub by adding the product of (local a)*(Bs[:,k])
+                    for (int m =0; m < Bsub_nrows; m++){ // for each element of A, row of Bs
+                        assert(k * Csub.stride < M*N); // check that index is not out of bound
+                        // int col = k + BLOCK_SIZE_X*blockIdx.x; // for C or B 
+                        // int row = l*BLOCK_SIZE_Y + m;
+                        // assert(row < K); 
+                        // assert(col < N);  
+
+                        // if (linearIdx==1 && k==0){
+                        //     printf("hi from [%d] at k = %d, m = %d where C[linearIdx,k], a[m], and Bs[m][k] are: %3.1f, %3.1f, and %3.1f\n", linearIdx, k, m, Csub.elements[k * Csub.stride], a[m], Bs[m][k]);
+                        // }
+
+                        if (m==0){  // multiply what was there by beta
+                            Csub.elements[k * Csub.stride] = beta*Csub.elements[k * Csub.stride] + alpha*a[m]*Bs[m][k]; 
+                            // C2[col * Csub.stride + myRowC] = beta*C2[col * Csub.stride + myRowC] + alpha*a[m]*Bs[m][k];  
+                            // Csub.elements[k * Csub.stride] = beta*Csub.elements[k * Csub.stride] + alpha*a[m]*B2[col*K+row];      
+                        }else{      // simply accumulate
+                            Csub.elements[k * Csub.stride] += alpha*a[m]*Bs[m][k];
+                            // C2[col * Csub.stride + myRowC] += alpha*a[m]*Bs[m][k];
+                            // Csub.elements[k * Csub.stride] += alpha*a[m]*B2[col*K+row];
+                        }
+                        // Try accessing C directly? nope - end up getting the exact same error. 
+                        // Try accessing B directly? nope - same exact error actually.   
+                    }
+                }
+            }
+
+            // Synchronize to make sure that the preceding
+            // computation is done before loading two new
+            // sub-matrices of A and B in the next iteration
+            __syncthreads();
+        }
+
+        
+        // if (i == 0 && j==0){
+        //     printf("%d and %d\n", K/4, (K+1)/4); 
+        // }
+    }
+}
+
+__global__
+void naiveGEMM(double* __restrict__ A, double* __restrict__ B,
            double* __restrict__ C, double alpha, double beta,
            int M, int N, int K) {
 
@@ -156,10 +370,12 @@ void elemwise(double* mat1, double* mat2, double* output_mat, int M, int N) {
 
 /*
 Routine to perform an in-place GEMM operation, i.e., C := alpha*A*B + beta*C
+    This version is the naive implementation that I implemented first. 
 */
-int myGEMM(double* __restrict__ A, double* __restrict__ B,
+int myNaiveGEMM(double* __restrict__ A, double* __restrict__ B,
            double* __restrict__ C, double* alpha, double* beta,
            int M, int N, int K) {
+
     /* TODO: Write an efficient GEMM implementation on GPU */
 
     // here is where I need to implement the CUDA GEMM kernel
@@ -170,7 +386,32 @@ int myGEMM(double* __restrict__ A, double* __restrict__ B,
     int num_blocks_x = (N + threadsPerBlock.x - 1)/threadsPerBlock.x; // N is number of columns
     int num_blocks_y = (M + threadsPerBlock.y - 1)/threadsPerBlock.y; // M is number of rows
     dim3 numBlocks(num_blocks_x, num_blocks_y); 
-    gpuGEMM<<<numBlocks, threadsPerBlock>>>(A, B, C, *alpha, *beta, M, N, K); 
+    naiveGEMM<<<numBlocks, threadsPerBlock>>>(A, B, C, *alpha, *beta, M, N, K); 
+
+    return 1;
+}
+
+/*
+Routine to perform an in-place GEMM operation, i.e., C := alpha*A*B + beta*C
+    This version follows that described by section 4.2 in the final project handout 1. 
+*/
+int myGEMM(double* A, double* B,
+           double* C, double* alpha, double* beta,
+           int M, int N, int K) {
+    /* TODO: Write an efficient GEMM implementation on GPU */
+
+    dim3 threadsPerBlock(BLOCK_SIZE_X, BLOCK_SIZE_Y);  // 64 threads per block 
+    int num_blocks_x = (N + threadsPerBlock.x - 1)/threadsPerBlock.x; // N is number of columns of C
+    int num_blocks_y = (M + threadsPerBlock.x*threadsPerBlock.y - 1)/threadsPerBlock.x/threadsPerBlock.y; // M is number of rows of C
+    std::cout << num_blocks_x << " and " << num_blocks_y << std::endl; // makes sense for simple cases now 
+    dim3 numBlocks(num_blocks_x, num_blocks_y); 
+
+    // Define A, B, C as matrices to faciliate computation
+    Matrix d_A, d_B, d_C;
+    d_A.height = d_A.stride = M; d_A.width = K; d_A.elements = A; 
+    d_B.height = d_B.stride = K; d_B.width = N; d_B.elements = B; 
+    d_C.height = d_C.stride = M; d_C.width = N; d_C.elements = C; 
+    gpuGEMM<<<numBlocks, threadsPerBlock>>>(d_A, d_B, d_C, B, C, *alpha, *beta, M, N, K); 
 
     return 1;
 }

@@ -7,7 +7,8 @@
 using namespace std;
 
 #define SCALE 1         // Factor to SCALE the GEMM problem size by
-#define NUM_ITERS 10    // Number of GEMMs run for timing purposes
+// #define NUM_ITERS 10    // Number of GEMMs run for timing purposes
+#define NUM_ITERS 1    // Jeremy edit
 #define GEMM_TOL 1e-12  // Tolerance for GEMM comparison
 
 // check whether the matrix from Seq is the same as from Par.
@@ -139,8 +140,11 @@ void TestGEMM(int M, int N, int K) {
     double* dC2;
     double* dummy;
 
-    double alpha = 2.0;
-    double beta = 5.0;
+    // double alpha = 2.0;
+    // double beta = 5.0;
+    double alpha = 1.0;
+    double beta = 0.0;
+    // Jeremy edit
 
     int num_iters = 100;
 
@@ -212,8 +216,9 @@ void TestGEMM(int M, int N, int K) {
     /* We are calling your GEMM function here */
     /* We will make one dummy call and check_launch here */
     int err;
-    err = myGEMM(dA, dB, dummy, &alpha, &beta, M, N, K);
-    check_launch("myGEMM dummy");
+    // err = myGEMM(dA, dB, dummy, &alpha, &beta, M, N, K);
+    // check_launch("myGEMM dummy");
+    // Jeremy edit
 
     double mystart = MPI_Wtime();
 
@@ -232,36 +237,6 @@ void TestGEMM(int M, int N, int K) {
     }
 
     cudaMemcpy(C1, dC1, sizeof(double) * M * N, cudaMemcpyDeviceToHost);
-
-    // Jeremy debugging 
-    // for (int i = 0; i < M; i++){
-    //     for (int j = 0; j < N; j++){
-    //             std::cout << "The " << i << ", " << j << " component of C1 is: " << C1[j*M+i] << std::endl;            
-    //     }
-    // }
-    // for (int i = 0; i < M; i++){
-    //     for (int j = 0; j < K; j++){
-    //             std::cout << "The " << i << ", " << j << " component of A is: " << A[j*M+i] << std::endl;            
-    //     }
-    // }
-    // for (int i = 0; i < K; i++){
-    //     for (int j = 0; j < N; j++){
-    //             std::cout << "The " << i << ", " << j << " component of B is: " << B[j*K+i] << std::endl;            
-    //     }
-    // }
-    // std::cout << "alpha and beta are: " << alpha << " and " << beta << std::endl; 
-
-    // int count = 0; 
-    // for (int i = 0; i < M; i++){
-    //     for (int j = 0; j < N; j++){
-    //         if (abs(C1[j*M + i]-C2[j*M + i])>1.0e-3){
-    //             std::cout << "comparing output at entry " << i << ", " << j << ": " << C1[j*M + i] << " should be: " << C2[j*M + i] << std::endl;
-    //             count += 1; 
-    //         }
-            
-    //     }
-    // }
-    // std:: cout << "there are a total of " << count << " errors for a matrix of size " << M*N << std::endl; 
 
 
     int fail = compareGEMMResults(C1, C2, M, N);
@@ -292,7 +267,9 @@ void BenchmarkGEMM() {
               << std::endl;
 
     /* First GEMM Problem Size */
-    int M = 800*SCALE, N = 1000*SCALE, K = 784*SCALE;
+    // int M = 800*SCALE, N = 1000*SCALE, K = 784*SCALE;
+    // int M = 64 * SCALE, N = 16 * SCALE, K = 4 * SCALE; // Jeremy edit
+    int M = 16 * SCALE, N = 4 * SCALE, K = 4 * SCALE; // Jeremy edit
 
     std::cout << std::endl << "Starting GEMM 1: " << "M = " << M << "; N = "
               << N << "; K = " << K << std::endl;
@@ -300,10 +277,11 @@ void BenchmarkGEMM() {
     std::cout << "Completed GEMM 1" << std::endl;
 
     /* Second GEMM Problem Size */
-    M = 800*SCALE, N = 10*SCALE, K = 1000*SCALE;
+    // M = 800*SCALE, N = 10*SCALE, K = 1000*SCALE;
+    // M = 64 * SCALE, N = 16 * SCALE, K = 64 * SCALE; // Jeremy edit
 
-    std::cout << std::endl << "Starting GEMM 2: " << "M = " << M << "; N = "
-              << N << "; K = " << K << std::endl;
-    TestGEMM(M, N, K);
-    std::cout << "Completed GEMM 2" << std::endl;
+    // std::cout << std::endl << "Starting GEMM 2: " << "M = " << M << "; N = "
+    //           << N << "; K = " << K << std::endl;
+    // TestGEMM(M, N, K);
+    // std::cout << "Completed GEMM 2" << std::endl;
 }
