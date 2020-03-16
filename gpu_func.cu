@@ -132,6 +132,9 @@ void gpuGEMM(const Matrix A, const Matrix B, Matrix C, double *B2, double *C2, d
         int Csub_ncols = nom_last_col_B <= N-1 ? BLOCK_SIZE_X : (N - BLOCK_SIZE_X*(blockIdx.x)); // this prevents column index of C/B from going out of bounds
         // printf("[%d] my nom_last_colB and Csub_ncols are: %d and %d\n",linearIdx,nom_last_col_B,Csub_ncols); // all seem right for simple case
 
+        // Shared memory used to store Bsub 
+        __shared__ double Bs[BLOCK_SIZE_Y][BLOCK_SIZE_X]; // 2d array 
+
         // for each iteration, load l-th 4xCsub_ncols chunk of B into shared memory 
         int num_iters = K%BLOCK_SIZE_Y==0 ? K/BLOCK_SIZE_Y : K/BLOCK_SIZE_Y + 1; // if number of rows of B isn't divisible by K, we need to do one extra iteration with less rows of B 
         // printf("[%d] num_iters is: %d\n", linearIdx,num_iters); // seems right for simple case
@@ -140,22 +143,21 @@ void gpuGEMM(const Matrix A, const Matrix B, Matrix C, double *B2, double *C2, d
             // compute contribution to a 1xCsub_ncols chunk of Csub
 
             // Calculate number of rows of B to actually read from. Bsub_nrows < BLOCK_SIZE_Y if K not divisible by BLOCK_SIZE_Y and on final iteration 
-            int Bsub_nrows =  (K%BLOCK_SIZE_Y!=0 && l==num_iters-1) ? (K - BLOCK_SIZE_Y*(blockIdx.y)) :  BLOCK_SIZE_Y;  
+            int Bsub_nrows =  (K%BLOCK_SIZE_Y!=0 && l==num_iters-1) ? (K - BLOCK_SIZE_Y*l) :  BLOCK_SIZE_Y;  
             // if (linearIdx==0){ // all seem good for simple example 
             //     printf("[l=%d] Bsub_nrows is: %d\n",l,Bsub_nrows); 
             // }
 
             // Get sub-matrix Bsub of B
-            Matrix Bsub = GetSubMatrix(B, l, blockIdx.x, Bsub_nrows, Csub_ncols);
+            Matrix Bsub = GetSubMatrix(B, l, blockIdx.x, BLOCK_SIZE_Y, Csub_ncols);
             // if (linearIdx==0){ // this looks good 
+            //     printf("Bsub should have %d rows and %d columns\n", BLOCK_SIZE_Y, Csub_ncols);
             //     printf("[%d] Bsub[0,:] for l = %d is [%3.1f, %3.1f, %3.1f, %3.1f]\n",linearIdx, l,GetElement(Bsub,0,0), GetElement(Bsub,0,1), GetElement(Bsub,0,2), GetElement(Bsub,0,3));
             //     printf("[%d] Bsub[1,:] for l = %d is [%3.1f, %3.1f, %3.1f, %3.1f]\n",linearIdx, l,GetElement(Bsub,1,0), GetElement(Bsub,1,1), GetElement(Bsub,1,2), GetElement(Bsub,1,3));
             //     printf("[%d] Bsub[2,:] for l = %d is [%3.1f, %3.1f, %3.1f, %3.1f]\n",linearIdx, l,GetElement(Bsub,2,0), GetElement(Bsub,2,1), GetElement(Bsub,2,2), GetElement(Bsub,2,3));
             //     printf("[%d] Bsub[3,:] for l = %d is [%3.1f, %3.1f, %3.1f, %3.1f]\n",linearIdx, l,GetElement(Bsub,3,0), GetElement(Bsub,3,1), GetElement(Bsub,3,2), GetElement(Bsub,3,3));
             // }
 
-            // Shared memory used to store Bsub 
-            __shared__ double Bs[BLOCK_SIZE_Y][BLOCK_SIZE_X]; // 2d array 
 
             // Thread row and column within Bsub
             int row = threadIdx.y;
@@ -176,25 +178,33 @@ void gpuGEMM(const Matrix A, const Matrix B, Matrix C, double *B2, double *C2, d
                 // Load Bsub from device memory to shared memory
                 // Each thread loads one element of each sub-matrix
                 Bs[row][col] = GetElement(Bsub, row, col);
-
-                // fill up local array a 
-                for (int m = 0; m < Bsub_nrows; m++){
-                    int my_col = l*BLOCK_SIZE_Y + m; // stride is BLOCK_SIZE_Y = 4
-                    assert(my_col < K); // check that index is valid
-                    assert(M*my_col + myRowC < M*K); // check that index is not out of bounds
-                    if (my_col >=K){
-                        printf("[%d] I am trying to access column %d\n",linearIdx, my_col); 
-                    }
-                    a[m] = A.elements[M*my_col + myRowC]; 
-                }
             }
+
+            // Get sub-matrix Bsub of B
+            Matrix Asub = GetSubMatrix(A, myRowC, l, 1, BLOCK_SIZE_X);
+            // if (linearIdx==15){ // this looks good 
+            //     printf("[%d] Asub[0,:] for l = %d is [%3.1f, %3.1f, %3.1f, %3.1f]\n",linearIdx, l, GetElement(Asub,0,0), GetElement(Asub,0,1), GetElement(Asub,0,2), GetElement(Asub,0,3));
+            // }
+
+            // fill up local array a 
+            for (int m = 0; m < Bsub_nrows; m++){
+                // int my_col = l*BLOCK_SIZE_Y + m; // stride is BLOCK_SIZE_Y = 4
+                // if (my_col >=K){
+                //     printf("[%d] I am trying to access column %d because l = %d, m = %d, BLOCK_SIZE_Y = %d\n",linearIdx, my_col, l, m, BLOCK_SIZE_Y); 
+                // }
+                // assert(my_col < K); // check that index is valid
+                // assert(M*my_col + myRowC < M*K); // check that index is not out of bounds
+                // a[m] = A.elements[M*my_col + myRowC]; // old assignment 
+                a[m] = GetElement(Asub,0,m);
+            }
+            
 
             // Synchronize to make sure the sub-matrices are loaded
             // before starting the computation
             __syncthreads();
 
             // check local a 
-            // printf("[%d] My local a is: [%3.1f, %3.1f, %3.1f, %3.1f]\n",linearIdx, a[0], a[1], a[2], a[3]); // looks good here
+            // printf("[%d] My local a is: [%3.1f, %3.1f, %3.1f, %3.1f]\n",linearIdx, a[0], a[1], a[2], a[3]); // still not right
 
             // check shared Bsub
             // if (linearIdx==0){ // this looks good 
@@ -206,32 +216,30 @@ void gpuGEMM(const Matrix A, const Matrix B, Matrix C, double *B2, double *C2, d
 
             // Multiply a and Bsub together
             // if (l==0) printf("[%d] Csub.stride is %d and it should be %d \n", linearIdx, Csub.stride, M); // this is correct 
-            if (row_in_B < K){
-                for (int k = 0; k < Csub_ncols; k++){ // for each column in Csub. this prevents column index of C/B from going out of bounds
-                    // for each column, we are basically accumulating into the k-th column of my Csub by adding the product of (local a)*(Bs[:,k])
-                    for (int m =0; m < Bsub_nrows; m++){ // for each element of A, row of Bs
-                        assert(k * Csub.stride < M*N); // check that index is not out of bound
-                        // int col = k + BLOCK_SIZE_X*blockIdx.x; // for C or B 
-                        // int row = l*BLOCK_SIZE_Y + m;
-                        // assert(row < K); 
-                        // assert(col < N);  
+            for (int k = 0; k < Csub_ncols; k++){ // for each column in Csub. this prevents column index of C/B from going out of bounds
+                // for each column, we are basically accumulating into the k-th column of my Csub by adding the product of (local a)*(Bs[:,k])
+                for (int m =0; m < Bsub_nrows; m++){ // for each element of A, row of Bs
+                    assert(k * Csub.stride < M*N); // check that index is not out of bound
+                    // int col = k + BLOCK_SIZE_X*blockIdx.x; // for C or B 
+                    // int row = l*BLOCK_SIZE_Y + m;
+                    // assert(row < K); 
+                    // assert(col < N);  
 
-                        // if (linearIdx==1 && k==0){
-                        //     printf("hi from [%d] at k = %d, m = %d where C[linearIdx,k], a[m], and Bs[m][k] are: %3.1f, %3.1f, and %3.1f\n", linearIdx, k, m, Csub.elements[k * Csub.stride], a[m], Bs[m][k]);
-                        // }
+                    // if (linearIdx==1 && k==0){
+                    //     printf("hi from [%d] at k = %d, m = %d where C[linearIdx,k], a[m], and Bs[m][k] are: %3.1f, %3.1f, and %3.1f\n", linearIdx, k, m, Csub.elements[k * Csub.stride], a[m], Bs[m][k]);
+                    // }
 
-                        if (m==0 && l==0){  // if this is our first pass multiply what was stored in C by beta
-                            Csub.elements[k * Csub.stride] = beta*Csub.elements[k * Csub.stride] + alpha*a[m]*Bs[m][k]; 
-                            // C2[col * Csub.stride + myRowC] = beta*C2[col * Csub.stride + myRowC] + alpha*a[m]*Bs[m][k];  
-                            // Csub.elements[k * Csub.stride] = beta*Csub.elements[k * Csub.stride] + alpha*a[m]*B2[col*K+row];      
-                        }else{      // simply accumulate
-                            Csub.elements[k * Csub.stride] += alpha*a[m]*Bs[m][k];
-                            // C2[col * Csub.stride + myRowC] += alpha*a[m]*Bs[m][k];
-                            // Csub.elements[k * Csub.stride] += alpha*a[m]*B2[col*K+row];
-                        }
-                        // Try accessing C directly? nope - end up getting the exact same error. 
-                        // Try accessing B directly? nope - same exact error actually.   
+                    if (m==0 && l==0){  // if this is our first pass multiply what was stored in C by beta
+                        Csub.elements[k * Csub.stride] = beta*Csub.elements[k * Csub.stride] + alpha*a[m]*Bs[m][k]; 
+                        // C2[col * Csub.stride + myRowC] = beta*C2[col * Csub.stride + myRowC] + alpha*a[m]*Bs[m][k];  
+                        // Csub.elements[k * Csub.stride] = beta*Csub.elements[k * Csub.stride] + alpha*a[m]*B2[col*K+row];      
+                    }else{      // simply accumulate
+                        Csub.elements[k * Csub.stride] += alpha*a[m]*Bs[m][k];
+                        // C2[col * Csub.stride + myRowC] += alpha*a[m]*Bs[m][k];
+                        // Csub.elements[k * Csub.stride] += alpha*a[m]*B2[col*K+row];
                     }
+                    // Try accessing C directly? nope - end up getting the exact same error. 
+                    // Try accessing B directly? nope - same exact error actually.   
                 }
             }
 

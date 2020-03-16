@@ -267,9 +267,12 @@ void BenchmarkGEMM() {
               << std::endl;
 
     /* First GEMM Problem Size */
-    int M = 800*SCALE, N = 1000*SCALE, K = 784*SCALE;
+    // int M = 800*SCALE, N = 1000*SCALE, K = 784*SCALE;
     // int M = 64 * SCALE, N = 16 * SCALE, K = 4 * SCALE; // Jeremy edit
     // int M = 16 * SCALE, N = 4 * SCALE, K = 4 * SCALE; // Jeremy edit
+    // int M = 16 * SCALE, N = 5 * SCALE, K = 4 * SCALE; // does not work (testing N is not divisible by 4)
+    int M = 16 * SCALE, N = 4 * SCALE, K = 5 * SCALE; // does not work (testing K is not divisible by 4)
+    // int M = 17 * SCALE, N = 4 * SCALE, K = 4 * SCALE; // does not work (testing M is not divisible by 4)
 
     std::cout << std::endl << "Starting GEMM 1: " << "M = " << M << "; N = "
               << N << "; K = " << K << std::endl;
@@ -277,12 +280,12 @@ void BenchmarkGEMM() {
     std::cout << "Completed GEMM 1" << std::endl;
 
     /* Second GEMM Problem Size */
-    M = 800*SCALE, N = 10*SCALE, K = 1000*SCALE;
-    // M = 64 * SCALE, N = 16 * SCALE, K = 8 * SCALE; // Jeremy edit
-    // M = 16 * SCALE, N = 4 * SCALE, K = 8 * SCALE; // Jeremy edit: code breaks if K is a multiple of BLOCK_SIZE_Y
+    // M = 800*SCALE, N = 10*SCALE, K = 1000*SCALE;
+    // // M = 64 * SCALE, N = 16 * SCALE, K = 8 * SCALE; // Jeremy edit
+    // // M = 16 * SCALE, N = 4 * SCALE, K = 8 * SCALE; // Jeremy edit: code breaks if K is a multiple of BLOCK_SIZE_Y
 
-    std::cout << std::endl << "Starting GEMM 2: " << "M = " << M << "; N = "
-              << N << "; K = " << K << std::endl;
-    TestGEMM(M, N, K);
-    std::cout << "Completed GEMM 2" << std::endl;
+    // std::cout << std::endl << "Starting GEMM 2: " << "M = " << M << "; N = "
+    //           << N << "; K = " << K << std::endl;
+    // TestGEMM(M, N, K);
+    // std::cout << "Completed GEMM 2" << std::endl;
 }
