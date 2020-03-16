@@ -7,8 +7,7 @@
 using namespace std;
 
 #define SCALE 1         // Factor to SCALE the GEMM problem size by
-// #define NUM_ITERS 10    // Number of GEMMs run for timing purposes
-#define NUM_ITERS 1    // Jeremy edit
+#define NUM_ITERS 10    // Number of GEMMs run for timing purposes
 #define GEMM_TOL 1e-12  // Tolerance for GEMM comparison
 
 // check whether the matrix from Seq is the same as from Par.
@@ -73,7 +72,6 @@ int checkNNErrors(NeuralNetwork& seq_nn, NeuralNetwork& par_nn,
     return error;
 }
 
-// M, N, K = NI, NJ, NK. A is MxK, B is KxN, C is MxN. 
 void createMATS(double* A, double* B, double* C1, double* C2, int NI, int NJ,
                 int NK) {
     int i, j;
@@ -81,14 +79,12 @@ void createMATS(double* A, double* B, double* C1, double* C2, int NI, int NJ,
     for(j = 0; j < NK; j++) {
         for(i = 0; i < NI; i++) {
             A[i + j*NI] = ((double) i*j) / NI;
-            // A[i + j*NI] = ((double) i*j); // for debugging 
         }
     }
 
     for(j = 0; j < NJ; j++) {
         for(i = 0; i < NK; i++) {
             B[i + j*NK] = ((double) i*j + 1) / NJ;
-            // B[i + j*NK] = ((double) i*j + 1); // for debugging 
         }
     }
 
@@ -96,12 +92,10 @@ void createMATS(double* A, double* B, double* C1, double* C2, int NI, int NJ,
         for(i = 0; i < NI; i++) {
             C1[i + j*NI] = 0;
             C2[i + j*NI] = ((double) i*j + 2) / NJ;
-            // C2[i + j*NI] = ((double) i*j + 2); // for debugging 
         }
     }
 }
 
-// called by TestGEMM
 int compareGEMMResults(double* myC, double* refC, int NI, int NJ) {
     int i, j;
     int fail = 0;
@@ -140,11 +134,8 @@ void TestGEMM(int M, int N, int K) {
     double* dC2;
     double* dummy;
 
-    // double alpha = 2.0;
-    // double beta = 5.0;
-    double alpha = 1.0;
-    double beta = 0.0;
-    // Jeremy edit
+    double alpha = 2.0;
+    double beta = 5.0;
 
     int num_iters = 100;
 
@@ -211,22 +202,13 @@ void TestGEMM(int M, int N, int K) {
                   std::endl;
     }
 
-    // Jeremy edit
-    arma::mat myA(A, M, K);
-    myA.print("A: ");
-    arma::mat myB(B, K, N);
-    myB.print("B: ");
-    arma::mat myC(C2, M, N);
-    myC.print("C: ");
-
     cudaMemcpy(C2, dC2, sizeof(double) * M * N, cudaMemcpyDeviceToHost);
 
     /* We are calling your GEMM function here */
     /* We will make one dummy call and check_launch here */
     int err;
-    // err = myGEMM(dA, dB, dummy, &alpha, &beta, M, N, K);
-    // check_launch("myGEMM dummy");
-    // Jeremy edit
+    err = myGEMM(dA, dB, dummy, &alpha, &beta, M, N, K);
+    check_launch("myGEMM dummy");
 
     double mystart = MPI_Wtime();
 
@@ -245,7 +227,6 @@ void TestGEMM(int M, int N, int K) {
     }
 
     cudaMemcpy(C1, dC1, sizeof(double) * M * N, cudaMemcpyDeviceToHost);
-
 
     int fail = compareGEMMResults(C1, C2, M, N);
 
@@ -267,30 +248,23 @@ void TestGEMM(int M, int N, int K) {
     cudaFree(dummy);
 }
 
-// calls TestGEMM for two different matrices 
-// desired output is MxN. K is the inner dimension of A and B. 
 void BenchmarkGEMM() {
 
     std::cout << std::endl << "Entering GEMM Benchmarking mode! Stand by."
               << std::endl;
 
     /* First GEMM Problem Size */
-    // int M = 800*SCALE, N = 1000*SCALE, K = 784*SCALE;
-    int M = 32 * SCALE, N = 8 * SCALE, K = 5 * SCALE; // testing K not divisble BLOCK_SIZE_Y when BLOCK_SIZE_X = 8
-    // int M = 16 * SCALE, N = 4 * SCALE, K = 5 * SCALE; // this work s
+    int M = 800*SCALE, N = 1000*SCALE, K = 784*SCALE;
 
     std::cout << std::endl << "Starting GEMM 1: " << "M = " << M << "; N = "
               << N << "; K = " << K << std::endl;
     TestGEMM(M, N, K);
     std::cout << "Completed GEMM 1" << std::endl;
 
-    /* Second GEMM Problem Size */
-    // M = 800*SCALE, N = 10*SCALE, K = 1000*SCALE;
-    // // M = 64 * SCALE, N = 16 * SCALE, K = 8 * SCALE; // Jeremy edit
-    // // M = 16 * SCALE, N = 4 * SCALE, K = 8 * SCALE; // Jeremy edit: code breaks if K is a multiple of BLOCK_SIZE_Y
-
-    // std::cout << std::endl << "Starting GEMM 2: " << "M = " << M << "; N = "
-    //           << N << "; K = " << K << std::endl;
-    // TestGEMM(M, N, K);
-    // std::cout << "Completed GEMM 2" << std::endl;
+    /* Secong GEMM Problem Size */
+    M = 800*SCALE, N = 10*SCALE, K = 1000*SCALE;
+    std::cout << std::endl << "Starting GEMM 2: " << "M = " << M << "; N = "
+              << N << "; K = " << K << std::endl;
+    TestGEMM(M, N, K);
+    std::cout << "Completed GEMM 2" << std::endl;
 }
