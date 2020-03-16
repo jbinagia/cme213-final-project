@@ -8,7 +8,7 @@
 
 // Thread block size for myGEMM
 // #define BLOCK_SIZE_X 16
-#define BLOCK_SIZE_X 4
+#define BLOCK_SIZE_X 8
 #define BLOCK_SIZE_Y 4
 
 __global__
@@ -154,12 +154,12 @@ void gpuGEMM(const Matrix A, const Matrix B, Matrix C, double *B2, double *C2, d
         // Thread row and column within Bsub
         int row = threadIdx.y;
         int col = threadIdx.x;
-        // if (l==0){ // all seem good for simple case
-        //     printf("[%d] my row and column in Bsub is %d and %d\n",linearIdx,row,col); 
-        // }
+        if (l==0){ // all seem good for simple case
+            printf("[%d] my row and column in Bsub is %d and %d\n",linearIdx,row,col); 
+        }
 
-        // Now each thread retrieves a 1 x BLOCK_SIZE_X chunk of A (we only need 1 x Bsub_nrows of it)
-        double a[BLOCK_SIZE_X]; // local 1 x BLOCK_SIZE_X array 
+        // Now each thread retrieves a 1 x BLOCK_SIZE_Y chunk of A (we only need 1 x Bsub_nrows of it)
+        double a[BLOCK_SIZE_Y]; // local 1 x BLOCK_SIZE_Y array 
 
         // prevent row index of B / column index of A from going out of bounds
         int row_in_B = row + l*BLOCK_SIZE_Y; 
@@ -173,7 +173,7 @@ void gpuGEMM(const Matrix A, const Matrix B, Matrix C, double *B2, double *C2, d
         }
 
         // Get sub-matrix Bsub of B
-        Matrix Asub = GetSubMatrix(A, myRowC, l, 1, BLOCK_SIZE_X);
+        Matrix Asub = GetSubMatrix(A, myRowC, l, 1, BLOCK_SIZE_Y);
         // if (linearIdx==15){ // this looks good 
         //     printf("[%d] Asub[0,:] for l = %d is [%3.1f, %3.1f, %3.1f, %3.1f]\n",linearIdx, l, GetElement(Asub,0,0), GetElement(Asub,0,1), GetElement(Asub,0,2), GetElement(Asub,0,3));
         // }
