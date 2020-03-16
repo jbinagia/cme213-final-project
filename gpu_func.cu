@@ -220,7 +220,7 @@ void gpuGEMM(const Matrix A, const Matrix B, Matrix C, double *B2, double *C2, d
                         //     printf("hi from [%d] at k = %d, m = %d where C[linearIdx,k], a[m], and Bs[m][k] are: %3.1f, %3.1f, and %3.1f\n", linearIdx, k, m, Csub.elements[k * Csub.stride], a[m], Bs[m][k]);
                         // }
 
-                        if (m==0){  // multiply what was there by beta
+                        if (m==0 && l==0){  // if this is our first pass multiply what was stored in C by beta
                             Csub.elements[k * Csub.stride] = beta*Csub.elements[k * Csub.stride] + alpha*a[m]*Bs[m][k]; 
                             // C2[col * Csub.stride + myRowC] = beta*C2[col * Csub.stride + myRowC] + alpha*a[m]*Bs[m][k];  
                             // Csub.elements[k * Csub.stride] = beta*Csub.elements[k * Csub.stride] + alpha*a[m]*B2[col*K+row];      
