@@ -7,8 +7,7 @@
 using namespace std;
 
 #define SCALE 1         // Factor to SCALE the GEMM problem size by
-// #define NUM_ITERS 10    // Number of GEMMs run for timing purposes
-#define NUM_ITERS 1    // Jeremy edit
+#define NUM_ITERS 10    // Number of GEMMs run for timing purposes
 #define GEMM_TOL 1e-12  // Tolerance for GEMM comparison
 
 // check whether the matrix from Seq is the same as from Par.
@@ -140,11 +139,8 @@ void TestGEMM(int M, int N, int K) {
     double* dC2;
     double* dummy;
 
-    // double alpha = 2.0;
-    // double beta = 5.0;
-    double alpha = 1.0;
-    double beta = 0.0;
-    // Jeremy edit
+    double alpha = 2.0;
+    double beta = 5.0;
 
     int num_iters = 100;
 
@@ -211,22 +207,13 @@ void TestGEMM(int M, int N, int K) {
                   std::endl;
     }
 
-    // Jeremy edit
-    arma::mat myA(A, M, K);
-    myA.print("A: ");
-    arma::mat myB(B, K, N);
-    myB.print("B: ");
-    arma::mat myC(C2, M, N);
-    myC.print("C: ");
-
     cudaMemcpy(C2, dC2, sizeof(double) * M * N, cudaMemcpyDeviceToHost);
 
     /* We are calling your GEMM function here */
     /* We will make one dummy call and check_launch here */
     int err;
-    // err = myGEMM(dA, dB, dummy, &alpha, &beta, M, N, K);
-    // check_launch("myGEMM dummy");
-    // Jeremy edit
+    err = myGEMM(dA, dB, dummy, &alpha, &beta, M, N, K);
+    check_launch("myGEMM dummy");
 
     double mystart = MPI_Wtime();
 
@@ -245,7 +232,6 @@ void TestGEMM(int M, int N, int K) {
     }
 
     cudaMemcpy(C1, dC1, sizeof(double) * M * N, cudaMemcpyDeviceToHost);
-
 
     int fail = compareGEMMResults(C1, C2, M, N);
 
@@ -275,10 +261,7 @@ void BenchmarkGEMM() {
               << std::endl;
 
     /* First GEMM Problem Size */
-    // int M = 800*SCALE, N = 1000*SCALE, K = 784*SCALE;
-    // int M = 64 * SCALE, N = 16 * SCALE, K = 4 * SCALE; // Jeremy edit
-    // int M = 16 * SCALE, N = 4 * SCALE, K = 4 * SCALE; // Jeremy edit
-    int M = 17 * SCALE, N = 4 * SCALE, K = 4 * SCALE; // does not work (testing M is not divisible by 4)
+    int M = 800*SCALE, N = 1000*SCALE, K = 784*SCALE;
 
     std::cout << std::endl << "Starting GEMM 1: " << "M = " << M << "; N = "
               << N << "; K = " << K << std::endl;
@@ -286,12 +269,10 @@ void BenchmarkGEMM() {
     std::cout << "Completed GEMM 1" << std::endl;
 
     /* Second GEMM Problem Size */
-    // M = 800*SCALE, N = 10*SCALE, K = 1000*SCALE;
-    // // M = 64 * SCALE, N = 16 * SCALE, K = 8 * SCALE; // Jeremy edit
-    // // M = 16 * SCALE, N = 4 * SCALE, K = 8 * SCALE; // Jeremy edit: code breaks if K is a multiple of BLOCK_SIZE_Y
+    M = 800*SCALE, N = 10*SCALE, K = 1000*SCALE;
 
-    // std::cout << std::endl << "Starting GEMM 2: " << "M = " << M << "; N = "
-    //           << N << "; K = " << K << std::endl;
-    // TestGEMM(M, N, K);
-    // std::cout << "Completed GEMM 2" << std::endl;
+    std::cout << std::endl << "Starting GEMM 2: " << "M = " << M << "; N = "
+              << N << "; K = " << K << std::endl;
+    TestGEMM(M, N, K);
+    std::cout << "Completed GEMM 2" << std::endl;
 }

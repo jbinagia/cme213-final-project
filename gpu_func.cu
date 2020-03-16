@@ -396,7 +396,7 @@ int myNaiveGEMM(double* __restrict__ A, double* __restrict__ B,
     dim3 numBlocks(num_blocks_x, num_blocks_y); 
     naiveGEMM<<<numBlocks, threadsPerBlock>>>(A, B, C, *alpha, *beta, M, N, K); 
 
-    return 1;
+    return 0;
 }
 
 /*
@@ -421,7 +421,7 @@ int myGEMM(double* A, double* B,
     d_C.height = d_C.stride = M; d_C.width = N; d_C.elements = C; 
     gpuGEMM<<<numBlocks, threadsPerBlock>>>(d_A, d_B, d_C, B, C, *alpha, *beta, M, N, K); 
 
-    return 1;
+    return 0;
 }
 
 void GPUsigmoid(double* mat1, double* mat2, int M, int N) {
