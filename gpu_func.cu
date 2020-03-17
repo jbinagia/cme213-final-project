@@ -7,8 +7,9 @@
 #include "utils/common.h"
 
 // Thread block size for myGEMM
-#define BLOCK_SIZE_X 16
-#define BLOCK_SIZE_Y 4
+#define BLOCK_SIZE_X 4
+#define BLOCK_SIZE_Y 8
+#define BLOCK_SIZE 16   // for myGEMM 4.1 implementation 
 
 __global__
 void device_add_one(int* d_result, int t) {
@@ -104,7 +105,7 @@ void gpuGEMM(const Matrix A, const Matrix B, Matrix C, double alpha, double beta
         int col = threadIdx.x;
 
         // Now each thread retrieves a 1 x BLOCK_SIZE_Y chunk of A (we only need 1 x Bsub_nrows of it)
-        double a[BLOCK_SIZE_Y]; // local 1 x BLOCK_SIZE_Y array 
+        double a[BLOCK_SIZE_Y]; // local 1 x BLOCK_SIZE_Y array. This is all registers FYI. 
 
         // prevent row index of B / column index of A from going out of bounds
         int row_in_B = row + l*BLOCK_SIZE_Y; 
@@ -119,7 +120,7 @@ void gpuGEMM(const Matrix A, const Matrix B, Matrix C, double alpha, double beta
         // Get sub-matrix Bsub of B
         Matrix Asub = GetSubMatrix(A, myRowC, l, 1, BLOCK_SIZE_Y);
 
-        // fill up local array a 
+        // fill up local array a. This is about 2x times faster than accessing elements from Asub directly. 
         for (int m = 0; m < Bsub_nrows; m++){
             a[m] = GetElement(Asub,0,m);
         }
@@ -135,16 +136,22 @@ void gpuGEMM(const Matrix A, const Matrix B, Matrix C, double alpha, double beta
             Matrix Csub = GetSubMatrix(C, myRowC, blockIdx.x, 1, BLOCK_SIZE_X);
 
             // Multiply a and Bsub together
-            for (int k = 0; k < Csub_ncols; k++){ // for each column in Csub. this prevents column index of C/B from going out of bounds
+            for (int k = 0; k < Csub_ncols; k++){ // for each column in Csub. Note that we prevent column index of C/B from going out of bounds.
+
+                // initialize local value
+                double myCvalue = 0.0; 
+
+                // // initialize this entry of C
+                if (l==0) Csub.elements[k * Csub.stride] = beta*Csub.elements[k * Csub.stride];
 
                 // for each column, we are basically accumulating into the k-th column of my Csub by adding the product of (local a)*(Bs[:,k])
                 for (int m =0; m < Bsub_nrows; m++){ // for each element of A, row of Bs
-                    if (m==0 && l==0){  // if this is our first pass multiply what was stored in C by beta
-                        Csub.elements[k * Csub.stride] = beta*Csub.elements[k * Csub.stride] + alpha*a[m]*Bs[m][k]; 
-                    }else{      // simply accumulate
-                        Csub.elements[k * Csub.stride] += alpha*a[m]*Bs[m][k];
-                    } 
+                        // Csub.elements[k * Csub.stride] += alpha*a[m]*Bs[m][k];
+                        myCvalue += alpha*a[m]*Bs[m][k];
                 }
+
+                // write to global memory 
+                Csub.elements[k * Csub.stride] += myCvalue;
             }
         }
 
@@ -153,6 +160,77 @@ void gpuGEMM(const Matrix A, const Matrix B, Matrix C, double alpha, double beta
         // sub-matrices of A and B in the next iteration
         __syncthreads();
     }
+}
+
+__global__
+void gpuGEMM2(const Matrix A, const Matrix B, Matrix C, double alpha, double beta,
+           int M, int N, int K) {
+    
+    // Indices of this particular block in the grid of thread blocks 
+    int blockRow = blockIdx.y;
+    int blockCol = blockIdx.x;
+
+    // Retrieve the sub-matrix Csub that this block will compute 
+    Matrix Csub = GetSubMatrix(C, blockRow, blockCol, BLOCK_SIZE, BLOCK_SIZE);
+
+    // Value in Csub that this thread is responsible for 
+    double Cvalue = 0; 
+
+    // Get thread's row and column in the block
+    int row = threadIdx.y;
+    int col = threadIdx.x;
+    // assert(row < M);
+    // assert(col < N); 
+
+    // Get thread's row and column in C as a whole (to be used later)
+    int myRowInC = (blockIdx.y * blockDim.y) + threadIdx.y; 
+    int myColInC = (blockIdx.x * blockDim.x) + threadIdx.x;
+
+    // Calculate Csub by looping over required submatrices of A and B and accumulating result
+    int numSubMatrices = (K + BLOCK_SIZE - 1)/BLOCK_SIZE; // TODO: fix num_iters in 4.2 like this
+    // if (row==0 && col == 0){
+    //     printf("There will be %d inner iterations\n", numSubMatrices);
+    // }
+    for (int m = 0; m < numSubMatrices; m++){
+
+        // Retrieve corresponding sub-matrix Asub of A 
+        Matrix Asub = GetSubMatrix(A, blockRow, m, BLOCK_SIZE, BLOCK_SIZE);
+
+        // Retrieve corresponding sub-matrix Bsub of B
+        Matrix Bsub = GetSubMatrix(B, m, blockCol, BLOCK_SIZE, BLOCK_SIZE);
+
+        // Allocate shared memory for Asub and Bsub 
+        __shared__ double As[BLOCK_SIZE][BLOCK_SIZE]; 
+        __shared__ double Bs[BLOCK_SIZE][BLOCK_SIZE]; 
+
+        // If the inner dimension K is not divisible by BLOCK_SIZE, we want to 
+        // be careful with the column index of Asub, row index of bsub
+        int projectedFinalRowB = (m+1)*BLOCK_SIZE - 1; 
+        int lmax = (projectedFinalRowB > K-1) ? (K - BLOCK_SIZE*m) :  BLOCK_SIZE; 
+        // if (row==0 && col == 0){
+        //     printf("(m=%d) lmax = %d\n", m, lmax);
+        // }
+
+        // Load elements of Asub and Bsub into shared memory 
+        if (myRowInC < M && col < lmax) As[row][col] = GetElement(Asub, row, col); 
+        if (row < lmax && myColInC < N) Bs[row][col] = GetElement(Bsub, row, col); 
+
+        // Synchronize threads before doing computation 
+        __syncthreads();
+
+        // Perform computation: i.e. multiply Asub and Bsub together 
+        for (int l = 0; l < lmax; l++){
+            Cvalue += alpha*As[row][l]*Bs[l][col];
+        }
+
+        // Synchronize threads before loading new data into shared memory on next loop iteration 
+        __syncthreads();
+    }
+
+    // Write my element of Csub to memory 
+    if (myRowInC < M && myColInC < N)
+        Csub.elements[col * Csub.stride + row] = beta*Csub.elements[col * Csub.stride + row] + Cvalue;
+
 }
 
 __global__
@@ -307,10 +385,17 @@ int myGEMM(double* A, double* B,
            int M, int N, int K) {
     /* TODO: Write an efficient GEMM implementation on GPU */
 
-    dim3 threadsPerBlock(BLOCK_SIZE_X, BLOCK_SIZE_Y);  // 64 threads per block 
+    // 4.2
+    // dim3 threadsPerBlock(BLOCK_SIZE_X, BLOCK_SIZE_Y);  // if using 4.1 implementation 
+    // int num_blocks_x = (N + threadsPerBlock.x - 1)/threadsPerBlock.x; // N is number of columns of C
+    // int num_blocks_y = (M + threadsPerBlock.x*threadsPerBlock.y - 1)/threadsPerBlock.x/threadsPerBlock.y; // M is number of rows of C
+
+    // 4.1
+    dim3 threadsPerBlock(BLOCK_SIZE, BLOCK_SIZE);  
     int num_blocks_x = (N + threadsPerBlock.x - 1)/threadsPerBlock.x; // N is number of columns of C
-    int num_blocks_y = (M + threadsPerBlock.x*threadsPerBlock.y - 1)/threadsPerBlock.x/threadsPerBlock.y; // M is number of rows of C
+    int num_blocks_y = (M + threadsPerBlock.y - 1)/threadsPerBlock.y; // M is number of rows of C
     // std::cout << num_blocks_x << " and " << num_blocks_y << std::endl; // makes sense for simple cases now 
+
     dim3 numBlocks(num_blocks_x, num_blocks_y); 
 
     // Define A, B, C as matrices to faciliate computation
@@ -318,7 +403,8 @@ int myGEMM(double* A, double* B,
     d_A.height = d_A.stride = M; d_A.width = K; d_A.elements = A; 
     d_B.height = d_B.stride = K; d_B.width = N; d_B.elements = B; 
     d_C.height = d_C.stride = M; d_C.width = N; d_C.elements = C; 
-    gpuGEMM<<<numBlocks, threadsPerBlock>>>(d_A, d_B, d_C, *alpha, *beta, M, N, K); 
+    // gpuGEMM<<<numBlocks, threadsPerBlock>>>(d_A, d_B, d_C, *alpha, *beta, M, N, K); 
+    gpuGEMM2<<<numBlocks, threadsPerBlock>>>(d_A, d_B, d_C, *alpha, *beta, M, N, K); 
 
     return 0;
 }
