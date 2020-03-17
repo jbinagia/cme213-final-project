@@ -7,9 +7,11 @@ CC=mpic++
 CUD=nvcc
 
 # Flags
-CFLAGS= -O2 -std=c++11 -I/usr/include
+CFLAGS= -O2 -std=c++11 -I/usr/include # remove -02 and replace with -g for debug flags
+#CFLAGS= -g -std=c++11 -I/usr/include # remove -02 and replace with -g for debug flags
 LDFLAGS= -L/usr/local/cuda-10.2/lib64 -Wl,-rpath -Wl,.. -larmadillo -lcublas -lcudart 
 CUDFLAGS= -O2 -c -arch=sm_37 -Xcompiler -Wall,-Winline,-Wextra,-Wno-strict-aliasing 
+#CUDFLAGS= -g -lineinfo -c -arch=sm_37 -Xcompiler -Wall,-Winline,-Wextra,-Wno-strict-aliasing # remove -02 and replace with -g for debug flags. -lineinfo for nvprof. 
 INCFLAGS= -I/usr/local/cuda/include -I/usr/local/cuda/samples/common/inc -I$(INCDIR)
 #-fmad=false
 
