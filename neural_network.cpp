@@ -309,23 +309,23 @@ void train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
 }
 
 // GPU wrapper functions
-void GPUfeedforward(NeuralNetwork &nn, const arma::mat &X, double* d_X,
+void GPUfeedforward(NeuralNetwork &nn, double* d_X, int X_n_rows, int X_n_cols,
     struct cache &cache, double* d_W0, double* d_W1, double* d_a0, double* d_a1, double* d_z1, double* d_z2)
 {
     cache.z.resize(2); // http://arma.sourceforge.net/docs.html#resize_member. Recreate the object according to given size specifications, while preserving the elements as well as the layout of the elements.
     cache.a.resize(2); // each cache is a std::vector of size 2.
 
     // std::cout << W[0].n_rows << "\n";tw
-    assert(X.n_rows == nn.W[0].n_cols);
-    cache.X = X;
-    int N = X.n_cols;
+    // assert(X.n_rows == nn.W[0].n_cols);
+    // cache.X = X;
+    int N = X_n_cols;
 
     // calculate input to sigmoid. W[i] are the weights of the i^th layer
     arma::mat z1 = arma::repmat(nn.b[0], 1, N); // initialize output
     cudaMemcpy(d_z1, z1.memptr(), sizeof(double) * nn.b[0].n_rows * N, cudaMemcpyHostToDevice);
     double alpha = 1.0;
     double beta = 1.0;
-    myGEMM(d_W0, d_X, d_z1, &alpha, &beta, nn.W[0].n_rows, N, X.n_rows);
+    myGEMM(d_W0, d_X, d_z1, &alpha, &beta, nn.W[0].n_rows, N, X_n_rows);
     cudaMemcpy(z1.memptr(), d_z1, sizeof(double) * nn.W[0].n_rows * N, cudaMemcpyDeviceToHost);
     cache.z[0] = z1;
 
@@ -336,7 +336,7 @@ void GPUfeedforward(NeuralNetwork &nn, const arma::mat &X, double* d_X,
     cache.a[0] = a0;
 
     // calculate input to sigmoid.
-    assert(a0.n_rows == nn.W[1].n_cols);
+    // assert(a0.n_rows == nn.W[1].n_cols);
     arma::mat z2 = arma::repmat(nn.b[1], 1, N); // initialize output. 1 copy per row, N copies per column.
     cudaMemcpy(d_z2, z2.memptr(), sizeof(double) * nn.b[1].n_rows * N, cudaMemcpyHostToDevice);
     myGEMM(d_W1, d_a0, d_z2, &alpha, &beta, nn.W[1].n_rows, z2.n_cols, a0.n_rows);
@@ -634,6 +634,7 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
             arma::mat X_batch = my_X_batches[batch];
             arma::mat y_batch = my_y_batches[batch];
 
+
             // memory allocation for this batch
             double *d_a0;
             double *d_z1;
@@ -649,7 +650,8 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
 
             // forward and backward pass
             struct cache bpcache;
-            GPUfeedforward(nn, X_batch, d_X, bpcache, d_W0, d_W1, d_a0, d_a1, d_z1, d_z2); 
+            bpcache.X = X_batch;
+            GPUfeedforward(nn, d_X, X_batch.n_rows, X_batch.n_cols, bpcache, d_W0, d_W1, d_a0, d_a1, d_z1, d_z2); 
 
             struct grads bpgrads;
             int normalization = batch_size;
