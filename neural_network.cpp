@@ -336,7 +336,7 @@ void GPUfeedforward(NeuralNetwork &nn, double* d_X, int X_n_rows, int X_n_cols,
 }
 
 void GPUbackprop(NeuralNetwork &nn, const arma::mat &y, double* d_yc, int y_n_rows, int y_n_cols, double reg,
-                double* d_X, double* d_XT, int X_n_cols, struct grads &bpgrads, double* d_a1, int num_procs, int normalization)
+                double* d_X, double* d_XT, int X_n_cols, struct grads &bpgrads, double* d_a1, double* d_W0, double* d_W1, double* d_W1T, int num_procs, int normalization)
 {
     bpgrads.dW.resize(2);
     bpgrads.db.resize(2);
@@ -347,9 +347,8 @@ void GPUbackprop(NeuralNetwork &nn, const arma::mat &y, double* d_yc, int y_n_ro
     // CUDA declarations, allocations, memcpy to device
     double *d_y;
     double *d_diff;
-    double *d_W1;
-    double *d_W0;
-    double *d_W1T;
+    double *d_dW1;
+    double *d_dW0;
     double *d_db1;
     double *d_da1;
     double *d_dz1_term1;
@@ -359,9 +358,8 @@ void GPUbackprop(NeuralNetwork &nn, const arma::mat &y, double* d_yc, int y_n_ro
     double *d_a1T;
     cudaMalloc((void **)&d_y, sizeof(double) * M * N);
     cudaMalloc((void **)&d_diff, sizeof(double) * M * N);
-    cudaMalloc((void **)&d_W1, sizeof(double) * nn.W[1].n_rows * nn.W[1].n_cols);
-    cudaMalloc((void **)&d_W0, sizeof(double) * nn.W[0].n_rows * nn.W[0].n_cols);
-    cudaMalloc((void **)&d_W1T, sizeof(double) * nn.W[1].n_cols * nn.W[1].n_rows);
+    cudaMalloc((void **)&d_dW1, sizeof(double) * nn.W[1].n_rows * nn.W[1].n_cols);
+    cudaMalloc((void **)&d_dW0, sizeof(double) * nn.W[0].n_rows * nn.W[0].n_cols); 
     cudaMalloc((void **)&d_db1, sizeof(double) * M * 1);
     cudaMalloc((void **)&d_da1, sizeof(double) * nn.W[1].n_cols * N);
     cudaMalloc((void **)&d_dz1_term1, sizeof(double) * nn.W[1].n_cols * N);
@@ -370,8 +368,8 @@ void GPUbackprop(NeuralNetwork &nn, const arma::mat &y, double* d_yc, int y_n_ro
     cudaMalloc((void **)&d_db0, sizeof(double) * nn.W[1].n_cols * 1);
     cudaMalloc((void **)&d_a1T, sizeof(double) * X_n_cols * nn.b[0].n_rows);
     cudaMemcpy(d_y, y.memptr(), sizeof(double) * M * N, cudaMemcpyHostToDevice);
-    cudaMemcpy(d_W1, nn.W[1].memptr(), sizeof(double) * nn.W[1].n_rows * nn.W[1].n_cols, cudaMemcpyHostToDevice);
-    cudaMemcpy(d_W0, nn.W[0].memptr(), sizeof(double) * nn.W[0].n_rows * nn.W[0].n_cols, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_dW1, d_W1, sizeof(double) * nn.W[1].n_rows * nn.W[1].n_cols, cudaMemcpyDeviceToDevice);
+    cudaMemcpy(d_dW0, d_W0, sizeof(double) * nn.W[0].n_rows * nn.W[0].n_cols, cudaMemcpyDeviceToDevice);
 
     // yc - y
     GPUaddition(d_yc, d_y, d_diff, 1.0 / normalization, -1.0 / normalization, M, N);
@@ -379,10 +377,10 @@ void GPUbackprop(NeuralNetwork &nn, const arma::mat &y, double* d_yc, int y_n_ro
     // start calculating gradients
     GPUtranspose(d_a1, d_a1T, nn.b[0].n_rows, X_n_cols);
     double alpha = 1.0;
-    myGEMM(d_diff, d_a1T, d_W1, &alpha, &reg, nn.W[1].n_rows, nn.W[1].n_cols, N);
-    // at this point d_W1 holds the result of diff * bpcache.a[0].t() + reg * nn.W[1] which should be assigned to bpgrads.dW[1]
+    myGEMM(d_diff, d_a1T, d_dW1, &alpha, &reg, nn.W[1].n_rows, nn.W[1].n_cols, N);
+    // at this point d_dW1 holds the result of diff * bpcache.a[0].t() + reg * nn.W[1] which should be assigned to bpgrads.dW[1]
     arma::mat dW1(nn.W[1].n_rows, nn.W[1].n_cols);
-    cudaMemcpy(dW1.memptr(), d_W1, sizeof(double) * dW1.n_rows * dW1.n_cols, cudaMemcpyDeviceToHost);
+    cudaMemcpy(dW1.memptr(), d_dW1, sizeof(double) * dW1.n_rows * dW1.n_cols, cudaMemcpyDeviceToHost);
     bpgrads.dW[1] = dW1;
 
     // calculate db1
@@ -390,10 +388,6 @@ void GPUbackprop(NeuralNetwork &nn, const arma::mat &y, double* d_yc, int y_n_ro
     GPUsum(d_diff, d_db1, M, N, 1);
     cudaMemcpy(db1.memptr(), d_db1, sizeof(double) * M * 1, cudaMemcpyDeviceToHost);
     bpgrads.db[1] = db1;
-
-    // calculate transpose of nn.W[1] to calculate da1
-    cudaMemcpy(d_W1, nn.W[1].memptr(), sizeof(double) * nn.W[1].n_rows * nn.W[1].n_cols, cudaMemcpyHostToDevice); // TODO: optimize this later. only needed since we overwrote d_W1
-    GPUtranspose(d_W1, d_W1T, nn.W[1].n_rows, nn.W[1].n_cols);
 
     // compute da1
     double beta = 0.0;
@@ -406,8 +400,8 @@ void GPUbackprop(NeuralNetwork &nn, const arma::mat &y, double* d_yc, int y_n_ro
 
     // calculate dw0
     arma::mat dW0(nn.W[0].n_rows, nn.W[0].n_cols);
-    myGEMM(d_dz1, d_XT, d_W0, &alpha, &reg, nn.W[0].n_rows, nn.W[0].n_cols, N);
-    cudaMemcpy(dW0.memptr(), d_W0, sizeof(double) * nn.W[0].n_rows * nn.W[0].n_cols, cudaMemcpyDeviceToHost);
+    myGEMM(d_dz1, d_XT, d_dW0, &alpha, &reg, nn.W[0].n_rows, nn.W[0].n_cols, N);
+    cudaMemcpy(dW0.memptr(), d_dW0, sizeof(double) * nn.W[0].n_rows * nn.W[0].n_cols, cudaMemcpyDeviceToHost);
     bpgrads.dW[0] = dW0;
 
     // calculat db0
@@ -419,9 +413,8 @@ void GPUbackprop(NeuralNetwork &nn, const arma::mat &y, double* d_yc, int y_n_ro
     // Cuda deallocation
     cudaFree(d_y);
     cudaFree(d_diff);
-    cudaFree(d_W1);
-    cudaFree(d_W0);
-    cudaFree(d_W1T);
+    cudaFree(d_dW1);
+    cudaFree(d_dW0);
     cudaFree(d_db1);
     cudaFree(d_da1);
     cudaFree(d_dz1_term1);
@@ -468,6 +461,7 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
     double *d_W1;
     double *d_dW0;
     double *d_dW1;
+    double *d_W1T;
     double *d_b0;
     double *d_b1;
     double *d_db0;
@@ -476,6 +470,7 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
     cudaMalloc((void **)&d_W1, sizeof(double) * nn.W[1].n_rows * nn.W[1].n_cols);
     cudaMalloc((void **)&d_dW0, sizeof(double) * nn.W[0].n_rows * nn.W[0].n_cols);
     cudaMalloc((void **)&d_dW1, sizeof(double) * nn.W[1].n_rows * nn.W[1].n_cols);
+    cudaMalloc((void **)&d_W1T, sizeof(double) * nn.W[1].n_cols * nn.W[1].n_rows); // we need this extra memory to store the gradient of W1
     cudaMalloc((void **)&d_b0, sizeof(double) * nn.b[0].n_rows * nn.b[0].n_cols);
     cudaMalloc((void **)&d_b1, sizeof(double) * nn.b[1].n_rows * nn.b[1].n_cols);
     cudaMalloc((void **)&d_db0, sizeof(double) * nn.b[0].n_rows * nn.b[0].n_cols);
@@ -615,7 +610,8 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
             if (batch == num_batches-1)
                 normalization = X_n_cols - (num_batches - 1) * batch_size;
             GPUtranspose(d_X, d_XT, X_batch.n_rows, X_batch.n_cols);
-            GPUbackprop(nn, y_batch, d_yc, y_batch.n_rows, y_batch.n_cols, reg, d_X, d_XT, X_batch.n_cols, bpgrads, d_a1, num_procs, normalization); 
+            GPUtranspose(d_W1, d_W1T, nn.W[1].n_rows, nn.W[1].n_cols);
+            GPUbackprop(nn, y_batch, d_yc, y_batch.n_rows, y_batch.n_cols, reg, d_X, d_XT, X_batch.n_cols, bpgrads, d_a1, d_W0, d_W1, d_W1T, num_procs, normalization); 
 
             // MPI all reduce local bpgrads
             MPI_Allreduce(bpgrads.dW[0].memptr(), dW0, bpgrads.dW[0].n_rows * bpgrads.dW[0].n_cols, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
@@ -631,15 +627,19 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
 
             // Gradient descent - W0
             GPUaddition(d_W0, d_dW0, d_W0, 1.0, -learning_rate, nn.W[0].n_rows, nn.W[0].n_cols);
-            arma::mat W0(nn.W[0].n_rows, nn.W[0].n_cols);
-            cudaMemcpy(W0.memptr(), d_W0, sizeof(double) * nn.W[0].n_rows * nn.W[0].n_cols, cudaMemcpyDeviceToHost);
-            nn.W[0] = W0;
+            if (epoch == epochs -1 && batch == num_batches - 1){
+                arma::mat W0(nn.W[0].n_rows, nn.W[0].n_cols);
+                cudaMemcpy(W0.memptr(), d_W0, sizeof(double) * nn.W[0].n_rows * nn.W[0].n_cols, cudaMemcpyDeviceToHost);
+                nn.W[0] = W0;
+            }
 
             // Gradient descent - W1
             GPUaddition(d_W1, d_dW1, d_W1, 1.0, -learning_rate, nn.W[1].n_rows, nn.W[1].n_cols);
-            arma::mat W1(nn.W[1].n_rows, nn.W[1].n_cols);
-            cudaMemcpy(W1.memptr(), d_W1, sizeof(double) * nn.W[1].n_rows * nn.W[1].n_cols, cudaMemcpyDeviceToHost);
-            nn.W[1] = W1;
+            if (epoch == epochs -1 && batch == num_batches - 1){
+                arma::mat W1(nn.W[1].n_rows, nn.W[1].n_cols);
+                cudaMemcpy(W1.memptr(), d_W1, sizeof(double) * nn.W[1].n_rows * nn.W[1].n_cols, cudaMemcpyDeviceToHost);
+                nn.W[1] = W1;
+            }
 
             // Gradient descent - b0
             GPUaddition(d_b0, d_db0, d_b0, 1.0, -learning_rate, nn.b[0].n_rows, nn.b[0].n_cols);
@@ -649,9 +649,11 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
 
             // Gradient descent - b1
             GPUaddition(d_b1, d_db1, d_b1, 1.0, -learning_rate, nn.b[1].n_rows, nn.b[1].n_cols);
+            // if (epoch == epochs -1 && batch == num_batches - 1){
             arma::mat b1(nn.b[1].n_rows, nn.b[1].n_cols);
             cudaMemcpy(b1.memptr(), d_b1, sizeof(double) * nn.b[1].n_rows * nn.b[1].n_cols, cudaMemcpyDeviceToHost);
             nn.b[1] = b1;
+            // }
 
             if (print_every <= 0)
             {
@@ -682,11 +684,30 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
         }
     }
 
+    // Update nn class before finishing 
+    // arma::mat W0(nn.W[0].n_rows, nn.W[0].n_cols);
+    // cudaMemcpy(W0.memptr(), d_W0, sizeof(double) * nn.W[0].n_rows * nn.W[0].n_cols, cudaMemcpyDeviceToHost);
+    // nn.W[0] = W0;
+
+    // arma::mat W1(nn.W[1].n_rows, nn.W[1].n_cols);
+    // cudaMemcpy(W1.memptr(), d_W1, sizeof(double) * nn.W[1].n_rows * nn.W[1].n_cols, cudaMemcpyDeviceToHost);
+    // nn.W[1] = W1;
+
+    // arma::mat b0(nn.b[0].n_rows, nn.b[0].n_cols);
+    // cudaMemcpy(b0.memptr(), d_b0, sizeof(double) * nn.b[0].n_rows * nn.b[0].n_cols, cudaMemcpyDeviceToHost);
+    // nn.b[0] = b0;
+
+    // arma::mat b1(nn.b[1].n_rows, nn.b[1].n_cols);
+    // cudaMemcpy(b1.memptr(), d_b1, sizeof(double) * nn.b[1].n_rows * nn.b[1].n_cols, cudaMemcpyDeviceToHost);
+    // nn.b[1] = b1;
+
+    // close error file
     error_file.close();
 
     // CUDA deallocation
     cudaFree(d_W0);
     cudaFree(d_W1);
+    cudaFree(d_W1T);
     cudaFree(d_dW0);
     cudaFree(d_dW1);
     cudaFree(d_b0);
