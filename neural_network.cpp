@@ -310,13 +310,12 @@ void train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
 
 // GPU wrapper functions
 void GPUfeedforward(NeuralNetwork &nn, double* d_X, int X_n_rows, int X_n_cols,
-    double* d_W0, double* d_W1, double* d_a1, double* d_yc, double* d_z1, double* d_z2)
+    double* d_W0, double* d_W1, double* d_b0, double* d_b1, double* d_a1, double* d_yc, double* d_z1, double* d_z2)
 {
     int N = X_n_cols;
 
     // calculate input to sigmoid. W[i] are the weights of the i^th layer
-    arma::mat z1 = arma::repmat(nn.b[0], 1, N); // initialize output
-    cudaMemcpy(d_z1, z1.memptr(), sizeof(double) * nn.b[0].n_rows * N, cudaMemcpyHostToDevice);
+    GPUrepmat(d_b0, d_z1, nn.b[0].n_rows, N);
     double alpha = 1.0;
     double beta = 1.0;
     myGEMM(d_W0, d_X, d_z1, &alpha, &beta, nn.W[0].n_rows, N, X_n_rows);
@@ -326,12 +325,11 @@ void GPUfeedforward(NeuralNetwork &nn, double* d_X, int X_n_rows, int X_n_cols,
     GPUsigmoid(d_z1, d_a1, nn.W[0].n_rows, N);
 
     // calculate input to sigmoid.
-    arma::mat z2 = arma::repmat(nn.b[1], 1, N); // initialize output. 1 copy per row, N copies per column.
-    cudaMemcpy(d_z2, z2.memptr(), sizeof(double) * nn.b[1].n_rows * N, cudaMemcpyHostToDevice);
-    myGEMM(d_W1, d_a1, d_z2, &alpha, &beta, nn.W[1].n_rows, z2.n_cols, a1.n_rows);
+    GPUrepmat(d_b1, d_z2, nn.b[1].n_rows, N);
+    myGEMM(d_W1, d_a1, d_z2, &alpha, &beta, nn.W[1].n_rows, N, a1.n_rows);
 
     // calculate second set of activations
-    arma::mat a2(z2.n_rows, z2.n_cols);
+    arma::mat a2(nn.b[1].n_rows, N);
     GPUsoftmax(d_z2, d_yc, a2.n_rows, a2.n_cols);
 }
 
@@ -470,7 +468,7 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
     cudaMalloc((void **)&d_W1, sizeof(double) * nn.W[1].n_rows * nn.W[1].n_cols);
     cudaMalloc((void **)&d_dW0, sizeof(double) * nn.W[0].n_rows * nn.W[0].n_cols);
     cudaMalloc((void **)&d_dW1, sizeof(double) * nn.W[1].n_rows * nn.W[1].n_cols);
-    cudaMalloc((void **)&d_W1T, sizeof(double) * nn.W[1].n_cols * nn.W[1].n_rows); // we need this extra memory to store the gradient of W1
+    cudaMalloc((void **)&d_W1T, sizeof(double) * nn.W[1].n_cols * nn.W[1].n_rows); 
     cudaMalloc((void **)&d_b0, sizeof(double) * nn.b[0].n_rows * nn.b[0].n_cols);
     cudaMalloc((void **)&d_b1, sizeof(double) * nn.b[1].n_rows * nn.b[1].n_cols);
     cudaMalloc((void **)&d_db0, sizeof(double) * nn.b[0].n_rows * nn.b[0].n_cols);
@@ -603,7 +601,7 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
             cudaMemcpy(d_X, X_batch.memptr(), sizeof(double) * X_batch.n_rows * X_batch.n_cols, cudaMemcpyHostToDevice);
 
             // forward and backward pass
-            GPUfeedforward(nn, d_X, X_batch.n_rows, X_batch.n_cols, d_W0, d_W1, d_a1, d_yc, d_z1, d_z2); 
+            GPUfeedforward(nn, d_X, X_batch.n_rows, X_batch.n_cols, d_W0, d_W1, d_b0, d_b1, d_a1, d_yc, d_z1, d_z2); 
 
             struct grads bpgrads;
             int normalization = batch_size;
@@ -643,17 +641,19 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
 
             // Gradient descent - b0
             GPUaddition(d_b0, d_db0, d_b0, 1.0, -learning_rate, nn.b[0].n_rows, nn.b[0].n_cols);
-            arma::mat b0(nn.b[0].n_rows, nn.b[0].n_cols);
-            cudaMemcpy(b0.memptr(), d_b0, sizeof(double) * nn.b[0].n_rows * nn.b[0].n_cols, cudaMemcpyDeviceToHost);
-            nn.b[0] = b0;
+            if (epoch == epochs -1 && batch == num_batches - 1){
+                arma::mat b0(nn.b[0].n_rows, nn.b[0].n_cols);
+                cudaMemcpy(b0.memptr(), d_b0, sizeof(double) * nn.b[0].n_rows * nn.b[0].n_cols, cudaMemcpyDeviceToHost);
+                nn.b[0] = b0;
+            }
 
             // Gradient descent - b1
             GPUaddition(d_b1, d_db1, d_b1, 1.0, -learning_rate, nn.b[1].n_rows, nn.b[1].n_cols);
-            // if (epoch == epochs -1 && batch == num_batches - 1){
-            arma::mat b1(nn.b[1].n_rows, nn.b[1].n_cols);
-            cudaMemcpy(b1.memptr(), d_b1, sizeof(double) * nn.b[1].n_rows * nn.b[1].n_cols, cudaMemcpyDeviceToHost);
-            nn.b[1] = b1;
-            // }
+            if (epoch == epochs -1 && batch == num_batches - 1){
+                arma::mat b1(nn.b[1].n_rows, nn.b[1].n_cols);
+                cudaMemcpy(b1.memptr(), d_b1, sizeof(double) * nn.b[1].n_rows * nn.b[1].n_cols, cudaMemcpyDeviceToHost);
+                nn.b[1] = b1;
+            }
 
             if (print_every <= 0)
             {
@@ -684,24 +684,6 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
         }
     }
 
-    // Update nn class before finishing 
-    // arma::mat W0(nn.W[0].n_rows, nn.W[0].n_cols);
-    // cudaMemcpy(W0.memptr(), d_W0, sizeof(double) * nn.W[0].n_rows * nn.W[0].n_cols, cudaMemcpyDeviceToHost);
-    // nn.W[0] = W0;
-
-    // arma::mat W1(nn.W[1].n_rows, nn.W[1].n_cols);
-    // cudaMemcpy(W1.memptr(), d_W1, sizeof(double) * nn.W[1].n_rows * nn.W[1].n_cols, cudaMemcpyDeviceToHost);
-    // nn.W[1] = W1;
-
-    // arma::mat b0(nn.b[0].n_rows, nn.b[0].n_cols);
-    // cudaMemcpy(b0.memptr(), d_b0, sizeof(double) * nn.b[0].n_rows * nn.b[0].n_cols, cudaMemcpyDeviceToHost);
-    // nn.b[0] = b0;
-
-    // arma::mat b1(nn.b[1].n_rows, nn.b[1].n_cols);
-    // cudaMemcpy(b1.memptr(), d_b1, sizeof(double) * nn.b[1].n_rows * nn.b[1].n_cols, cudaMemcpyDeviceToHost);
-    // nn.b[1] = b1;
-
-    // close error file
     error_file.close();
 
     // CUDA deallocation
