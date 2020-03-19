@@ -276,6 +276,17 @@ void naiveGEMM(double* __restrict__ A, double* __restrict__ B,
 }
 
 __global__
+void repmatKernel(double* mat1, double* mat2, int M, int N) {
+
+    uint i = (blockIdx.y * blockDim.y) + threadIdx.y; // let this correspond to row index
+    uint j = (blockIdx.x * blockDim.x) + threadIdx.x; // let this correspond to column index 
+
+    if (i < M && j < N){ 
+        mat2[j*M + i] = mat1[i]; 
+    }
+}
+
+__global__
 void sigmoidKernel(double* mat1, double* mat2, int M, int N) {
 
     uint i = (blockIdx.y * blockDim.y) + threadIdx.y; // let this correspond to row index
@@ -435,6 +446,16 @@ int myGEMM(double* A, double* B,
    gpuGEMM4d1<<<numBlocks, threadsPerBlock>>>(d_A, d_B, d_C, *alpha, *beta, M, N, K); 
 
     return 0;
+}
+
+void GPUrepmat(double* mat1, double* mat2, int M, int N) {
+
+    dim3 threadsPerBlock(8, 32);  // 256 threads
+    int num_blocks_x = (N + threadsPerBlock.x - 1)/threadsPerBlock.x; // N is number of columns
+    int num_blocks_y = (M + threadsPerBlock.y - 1)/threadsPerBlock.y; // M is number of rows
+    dim3 numBlocks(num_blocks_x, num_blocks_y); 
+
+    repmatKernel<<<numBlocks, threadsPerBlock>>>(mat1, mat2, M, N); 
 }
 
 void GPUsigmoid(double* mat1, double* mat2, int M, int N) {

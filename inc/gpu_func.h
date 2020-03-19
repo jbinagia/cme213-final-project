@@ -48,6 +48,8 @@ void gpuGEMM(double* A, double* B, double* C, double alpha, double beta, int M,
 int myGEMM(double* A, double* B, double* C, double* alpha, double* beta, int M,
            int N, int K);
 
+void GPUrepmat(double* mat, double* mat2, int M, int N);
+
 void GPUsigmoid(double* mat, double* mat2, int M, int N);
 
 void GPUsoftmax(double* mat, double* mat2, int M, int N); 
