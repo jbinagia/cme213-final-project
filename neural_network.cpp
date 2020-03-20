@@ -457,31 +457,6 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
        and therefore goes from 0 to epochs*num_batches */
     int iter = 0;
 
-    // CUDA declarations, allocations, memcpys
-    double *d_W0;
-    double *d_W1;
-    double *d_dW0;
-    double *d_dW1;
-    double *d_W1T;
-    double *d_b0;
-    double *d_b1;
-    double *d_db0;
-    double *d_db1;
-    cudaMalloc((void **)&d_W0, sizeof(double) * nn.W[0].n_rows * nn.W[0].n_cols);
-    cudaMalloc((void **)&d_W1, sizeof(double) * nn.W[1].n_rows * nn.W[1].n_cols);
-    cudaMalloc((void **)&d_dW0, sizeof(double) * nn.W[0].n_rows * nn.W[0].n_cols);
-    cudaMalloc((void **)&d_dW1, sizeof(double) * nn.W[1].n_rows * nn.W[1].n_cols);
-    cudaMalloc((void **)&d_W1T, sizeof(double) * nn.W[1].n_cols * nn.W[1].n_rows); 
-    cudaMalloc((void **)&d_b0, sizeof(double) * nn.b[0].n_rows * nn.b[0].n_cols);
-    cudaMalloc((void **)&d_b1, sizeof(double) * nn.b[1].n_rows * nn.b[1].n_cols);
-    cudaMalloc((void **)&d_db0, sizeof(double) * nn.b[0].n_rows * nn.b[0].n_cols);
-    cudaMalloc((void **)&d_db1, sizeof(double) * nn.b[1].n_rows * nn.b[1].n_cols);
-    cudaMemcpy(d_W0, nn.W[0].memptr(), sizeof(double) * nn.W[0].n_rows * nn.W[0].n_cols, cudaMemcpyHostToDevice);
-    cudaMemcpy(d_W1, nn.W[1].memptr(), sizeof(double) * nn.W[1].n_rows * nn.W[1].n_cols, cudaMemcpyHostToDevice);
-    cudaMemcpy(d_b0, nn.b[0].memptr(), sizeof(double) * nn.b[0].n_rows * nn.b[0].n_cols, cudaMemcpyHostToDevice);
-    cudaMemcpy(d_b1, nn.b[1].memptr(), sizeof(double) * nn.b[1].n_rows * nn.b[1].n_cols, cudaMemcpyHostToDevice);
-
-
     // -----------------------------------
     // Scatter data to different processes
     // -----------------------------------
@@ -498,11 +473,8 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
     MPI_Bcast(&y_n_rows, 1, MPI_INT, 0, MPI_COMM_WORLD);
 
     // define useful constants 
-    int my_num_cols = X_n_cols / num_procs; // approximate number of columns of X and y to distribute to each process (floor)
     int num_batches = (N + batch_size - 1) / batch_size; // number of batches there will be (last batch is of size <= batch_size)
     int minibatch_size = (batch_size + num_procs - 1) / num_procs; // given a batch size, how many training examples to distribute to each process
-
-    // std::cout << my_num_cols << std::endl; 
 
     // define data structure to hold each process's input data. The i-th entry to these vectors corresponds to batch # i. 
     std::vector<arma::mat> my_X_batches;
@@ -568,7 +540,7 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
     // Batch gradient descent
     // ----------------------
 
-    // Allocate memory for global gradients
+    // CUDA declarations, allocations, memcpys
     double *dW0 = new double[nn.W[0].n_rows * nn.W[0].n_cols];
     double *dW1 = new double[nn.W[1].n_rows * nn.W[1].n_cols];
     double *db0 = new double[nn.b[0].n_rows * nn.b[0].n_cols];
@@ -576,9 +548,38 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
     double *d_z1;
     double *d_z2;
     double *d_yc;
+    double *d_a1;
+    double *d_X;
+    double *d_XT;
+    double *d_W0;
+    double *d_W1;
+    double *d_dW0;
+    double *d_dW1;
+    double *d_W1T;
+    double *d_b0;
+    double *d_b1;
+    double *d_db0;
+    double *d_db1;
     cudaMalloc((void **)&d_z1, sizeof(double) * nn.b[0].n_rows * N);
     cudaMalloc((void **)&d_z2, sizeof(double) * nn.b[1].n_rows * N);
     cudaMalloc((void **)&d_yc, sizeof(double) * nn.b[1].n_rows * N);
+    cudaMalloc((void **)&d_a1, sizeof(double) * nn.b[0].n_rows * minibatch_size);
+    cudaMalloc((void **)&d_X, sizeof(double) * X_n_rows * minibatch_size);
+    cudaMalloc((void **)&d_XT, sizeof(double) * minibatch_size * X_n_rows);
+    cudaMalloc((void **)&d_W0, sizeof(double) * nn.W[0].n_rows * nn.W[0].n_cols);
+    cudaMalloc((void **)&d_W1, sizeof(double) * nn.W[1].n_rows * nn.W[1].n_cols);
+    cudaMalloc((void **)&d_dW0, sizeof(double) * nn.W[0].n_rows * nn.W[0].n_cols);
+    cudaMalloc((void **)&d_dW1, sizeof(double) * nn.W[1].n_rows * nn.W[1].n_cols);
+    cudaMalloc((void **)&d_W1T, sizeof(double) * nn.W[1].n_cols * nn.W[1].n_rows); 
+    cudaMalloc((void **)&d_b0, sizeof(double) * nn.b[0].n_rows * nn.b[0].n_cols);
+    cudaMalloc((void **)&d_b1, sizeof(double) * nn.b[1].n_rows * nn.b[1].n_cols);
+    cudaMalloc((void **)&d_db0, sizeof(double) * nn.b[0].n_rows * nn.b[0].n_cols);
+    cudaMalloc((void **)&d_db1, sizeof(double) * nn.b[1].n_rows * nn.b[1].n_cols);
+    cudaMemcpy(d_W0, nn.W[0].memptr(), sizeof(double) * nn.W[0].n_rows * nn.W[0].n_cols, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_W1, nn.W[1].memptr(), sizeof(double) * nn.W[1].n_rows * nn.W[1].n_cols, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_b0, nn.b[0].memptr(), sizeof(double) * nn.b[0].n_rows * nn.b[0].n_cols, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_b1, nn.b[1].memptr(), sizeof(double) * nn.b[1].n_rows * nn.b[1].n_cols, cudaMemcpyHostToDevice);
+
     double time1 = 0;
     double time2 = 0;
     double time3 = 0;
@@ -588,7 +589,6 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
     double time7 = 0;
     double time8 = 0;
 
-    // exit (EXIT_FAILURE);
     double end = MPI_Wtime();
 
     if (timing) std::cout << "Time for setup: " << end - start << " seconds" << std::endl;
@@ -609,20 +609,6 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
             arma::mat X_batch = my_X_batches[batch];
             arma::mat y_batch = my_y_batches[batch];
 
-
-            // memory allocation for this batch
-            double *d_a1;
-            // double *d_z1;
-            // double *d_z2;
-            // double *d_yc;
-            double *d_X;
-            double *d_XT;
-            // cudaMalloc((void **)&d_z1, sizeof(double) * nn.b[0].n_rows * N);
-            // cudaMalloc((void **)&d_z2, sizeof(double) * nn.b[1].n_rows * N);
-            cudaMalloc((void **)&d_a1, sizeof(double) * 2*nn.b[0].n_rows * X_batch.n_cols);
-            // cudaMalloc((void **)&d_yc, sizeof(double) * nn.b[1].n_rows * N);
-            cudaMalloc((void **)&d_X, sizeof(double) * X_batch.n_rows * X_batch.n_cols);
-            cudaMalloc((void **)&d_XT, sizeof(double) * X_batch.n_cols * X_batch.n_rows);
             double end = MPI_Wtime();
             time1 += end - start; 
             if (timing) printf("Time for setup in GD for batch %d, epoch %d: %f \n", batch, epoch, end-start);
@@ -729,13 +715,6 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
 
             iter++;
 
-            // memory deallocation for this batch
-            cudaFree(d_a1);
-            // cudaFree(d_z1);
-            // cudaFree(d_z2);
-            // cudaFree(d_yc);
-            cudaFree(d_X);
-            cudaFree(d_XT);
 
             end = MPI_Wtime();  
             time8 += end - start; 
@@ -756,6 +735,9 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
     cudaFree(d_b1);
     cudaFree(d_db0);
     cudaFree(d_db1);
+    cudaFree(d_a1);
+    cudaFree(d_X);
+    cudaFree(d_XT);
 
     // dynamic memory deallocation
     delete[] displs_x;
