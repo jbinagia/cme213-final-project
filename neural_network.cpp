@@ -333,8 +333,10 @@ void GPUfeedforward(NeuralNetwork &nn, double* d_X, int X_n_rows, int X_n_cols,
     GPUsoftmax(d_z2, d_yc, a2.n_rows, a2.n_cols);
 }
 
-void GPUbackprop(NeuralNetwork &nn, const arma::mat &y, double* d_yc, int y_n_rows, int y_n_cols, double reg,
-                double* d_X, double* d_XT, int X_n_cols, struct grads &bpgrads, double* d_a1, double* d_W0, double* d_W1, double* d_W1T, int num_procs, int normalization)
+void GPUbackprop(NeuralNetwork &nn, const arma::mat &y, double* d_y, double* d_diff, double* d_yc, int y_n_rows, int y_n_cols, double reg,
+                double* d_X, double* d_XT, int X_n_cols, struct grads &bpgrads, double* d_a1, double* d_W0, double* d_W1, double* d_W1T, 
+                double* d_my_db1, double* d_da1, double *d_dz1_term1, double *d_dz1_term2, double *d_dz1, double *d_my_db0, double *d_a1T,
+                int num_procs, int normalization)
 {
     bpgrads.dW.resize(2);
     bpgrads.db.resize(2);
@@ -343,29 +345,10 @@ void GPUbackprop(NeuralNetwork &nn, const arma::mat &y, double* d_yc, int y_n_ro
     reg = reg/(double(num_procs)); // account for variable number of processes
 
     // CUDA declarations, allocations, memcpy to device
-    double *d_y;
-    double *d_diff;
     double *d_dW1;
     double *d_dW0;
-    double *d_db1;
-    double *d_da1;
-    double *d_dz1_term1;
-    double *d_dz1_term2;
-    double *d_dz1;
-    double *d_db0;
-    double *d_a1T;
-    cudaMalloc((void **)&d_y, sizeof(double) * M * N);
-    cudaMalloc((void **)&d_diff, sizeof(double) * M * N);
     cudaMalloc((void **)&d_dW1, sizeof(double) * nn.W[1].n_rows * nn.W[1].n_cols);
     cudaMalloc((void **)&d_dW0, sizeof(double) * nn.W[0].n_rows * nn.W[0].n_cols); 
-    cudaMalloc((void **)&d_db1, sizeof(double) * M * 1);
-    cudaMalloc((void **)&d_da1, sizeof(double) * nn.W[1].n_cols * N);
-    cudaMalloc((void **)&d_dz1_term1, sizeof(double) * nn.W[1].n_cols * N);
-    cudaMalloc((void **)&d_dz1_term2, sizeof(double) * nn.W[1].n_cols * N);
-    cudaMalloc((void **)&d_dz1, sizeof(double) * nn.W[1].n_cols * N);
-    cudaMalloc((void **)&d_db0, sizeof(double) * nn.W[1].n_cols * 1);
-    cudaMalloc((void **)&d_a1T, sizeof(double) * X_n_cols * nn.b[0].n_rows);
-    cudaMemcpy(d_y, y.memptr(), sizeof(double) * M * N, cudaMemcpyHostToDevice);
     cudaMemcpy(d_dW1, d_W1, sizeof(double) * nn.W[1].n_rows * nn.W[1].n_cols, cudaMemcpyDeviceToDevice);
     cudaMemcpy(d_dW0, d_W0, sizeof(double) * nn.W[0].n_rows * nn.W[0].n_cols, cudaMemcpyDeviceToDevice);
 
@@ -383,8 +366,8 @@ void GPUbackprop(NeuralNetwork &nn, const arma::mat &y, double* d_yc, int y_n_ro
 
     // calculate db1
     arma::mat db1(M, 1);
-    GPUsum(d_diff, d_db1, M, N, 1);
-    cudaMemcpy(db1.memptr(), d_db1, sizeof(double) * M * 1, cudaMemcpyDeviceToHost);
+    GPUsum(d_diff, d_my_db1, M, N, 1);
+    cudaMemcpy(db1.memptr(), d_my_db1, sizeof(double) * M * 1, cudaMemcpyDeviceToHost);
     bpgrads.db[1] = db1;
 
     // compute da1
@@ -404,22 +387,13 @@ void GPUbackprop(NeuralNetwork &nn, const arma::mat &y, double* d_yc, int y_n_ro
 
     // calculat db0
     arma::mat db0(nn.W[1].n_cols, 1);
-    GPUsum(d_dz1, d_db0, nn.W[1].n_cols, N, 1);
-    cudaMemcpy(db0.memptr(), d_db0, sizeof(double) * nn.W[1].n_cols * 1, cudaMemcpyDeviceToHost);
+    GPUsum(d_dz1, d_my_db0, nn.W[1].n_cols, N, 1);
+    cudaMemcpy(db0.memptr(), d_my_db0, sizeof(double) * nn.W[1].n_cols * 1, cudaMemcpyDeviceToHost);
     bpgrads.db[0] = db0;
 
     // Cuda deallocation
-    cudaFree(d_y);
-    cudaFree(d_diff);
     cudaFree(d_dW1);
     cudaFree(d_dW0);
-    cudaFree(d_db1);
-    cudaFree(d_da1);
-    cudaFree(d_dz1_term1);
-    cudaFree(d_dz1_term2);
-    cudaFree(d_dz1);
-    cudaFree(d_db0);
-    cudaFree(d_a1T);
 }
 
 /*
@@ -560,6 +534,22 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
     double *d_b1;
     double *d_db0;
     double *d_db1;
+    double *d_y;
+    double *d_diff;
+    double *d_my_db1;
+    double *d_da1;
+    double *d_dz1_term1;
+    double *d_dz1_term2;
+    double *d_dz1;
+    double *d_my_db0;
+    double *d_a1T;
+    cudaMalloc((void **)&d_my_db1, sizeof(double) * y_n_rows * 1); // safe to move 
+    cudaMalloc((void **)&d_da1, sizeof(double) * nn.W[1].n_cols * minibatch_size); // safe to move
+    cudaMalloc((void **)&d_dz1_term1, sizeof(double) * nn.W[1].n_cols * minibatch_size); // safe
+    cudaMalloc((void **)&d_dz1_term2, sizeof(double) * nn.W[1].n_cols * minibatch_size); // safe
+    cudaMalloc((void **)&d_dz1, sizeof(double) * nn.W[1].n_cols * minibatch_size); // safe
+    cudaMalloc((void **)&d_my_db0, sizeof(double) * nn.W[1].n_cols * 1); // safe to move
+    cudaMalloc((void **)&d_a1T, sizeof(double) * X_n_cols * nn.b[0].n_rows); // safe
     cudaMalloc((void **)&d_z1, sizeof(double) * nn.b[0].n_rows * N);
     cudaMalloc((void **)&d_z2, sizeof(double) * nn.b[1].n_rows * N);
     cudaMalloc((void **)&d_yc, sizeof(double) * nn.b[1].n_rows * N);
@@ -575,6 +565,8 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
     cudaMalloc((void **)&d_b1, sizeof(double) * nn.b[1].n_rows * nn.b[1].n_cols);
     cudaMalloc((void **)&d_db0, sizeof(double) * nn.b[0].n_rows * nn.b[0].n_cols);
     cudaMalloc((void **)&d_db1, sizeof(double) * nn.b[1].n_rows * nn.b[1].n_cols);
+    cudaMalloc((void **)&d_y, sizeof(double) * y_n_rows * minibatch_size);
+    cudaMalloc((void **)&d_diff, sizeof(double) * y_n_rows * minibatch_size);
     cudaMemcpy(d_W0, nn.W[0].memptr(), sizeof(double) * nn.W[0].n_rows * nn.W[0].n_cols, cudaMemcpyHostToDevice);
     cudaMemcpy(d_W1, nn.W[1].memptr(), sizeof(double) * nn.W[1].n_rows * nn.W[1].n_cols, cudaMemcpyHostToDevice);
     cudaMemcpy(d_b0, nn.b[0].memptr(), sizeof(double) * nn.b[0].n_rows * nn.b[0].n_cols, cudaMemcpyHostToDevice);
@@ -608,12 +600,16 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
 
             arma::mat X_batch = my_X_batches[batch];
             arma::mat y_batch = my_y_batches[batch];
+            // printf("y_batch n_rows and n_cols: %d and %d \n", y_batch.n_rows, y_batch.n_cols);
+            // printf("y_batch n_rows and n_cols: %d and %d \n", y_n_rows, minibatch_size);
+
 
             double end = MPI_Wtime();
             time1 += end - start; 
             if (timing) printf("Time for setup in GD for batch %d, epoch %d: %f \n", batch, epoch, end-start);
             start = MPI_Wtime(); 
             cudaMemcpy(d_X, X_batch.memptr(), sizeof(double) * X_batch.n_rows * X_batch.n_cols, cudaMemcpyHostToDevice);
+            cudaMemcpy(d_y, y_batch.memptr(), sizeof(double) * y_n_rows * minibatch_size, cudaMemcpyHostToDevice);
             end = MPI_Wtime();
             time2 += end - start; 
             if (timing) printf("Time for cudaMemcpy for d_X: %f \n", end-start);
@@ -635,7 +631,8 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
                 normalization = X_n_cols - (num_batches - 1) * batch_size;
             GPUtranspose(d_X, d_XT, X_batch.n_rows, X_batch.n_cols);
             GPUtranspose(d_W1, d_W1T, nn.W[1].n_rows, nn.W[1].n_cols);
-            GPUbackprop(nn, y_batch, d_yc, y_batch.n_rows, y_batch.n_cols, reg, d_X, d_XT, X_batch.n_cols, bpgrads, d_a1, d_W0, d_W1, d_W1T, num_procs, normalization); 
+            GPUbackprop(nn, y_batch, d_y, d_diff, d_yc, y_batch.n_rows, y_batch.n_cols, reg, d_X, d_XT, X_batch.n_cols, bpgrads, d_a1, 
+                d_W0, d_W1, d_W1T, d_my_db1, d_da1, d_dz1_term1, d_dz1_term2, d_dz1, d_my_db0, d_a1T, num_procs, normalization); 
             end = MPI_Wtime();  
             time4 += end - start; 
             if (timing) std::cout << "Backprop: " << end - start << " seconds" << std::endl;
@@ -738,6 +735,15 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
     cudaFree(d_a1);
     cudaFree(d_X);
     cudaFree(d_XT);
+    cudaFree(d_y);
+    cudaFree(d_diff);
+    cudaFree(d_my_db1);
+    cudaFree(d_da1);
+    cudaFree(d_dz1_term1);
+    cudaFree(d_dz1_term2);
+    cudaFree(d_dz1);
+    cudaFree(d_my_db0);
+    cudaFree(d_a1T);
 
     // dynamic memory deallocation
     delete[] displs_x;
