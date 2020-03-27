@@ -7,8 +7,8 @@
 #include "utils/common.h"
 
 // Thread block size for myGEMM
-#define BLOCK_SIZE_X 16
-#define BLOCK_SIZE_Y 2
+#define BLOCK_SIZE_X 4
+#define BLOCK_SIZE_Y 32
 #define BLOCK_SIZE 16  // for myGEMM 4.1 implementation 
 
 __global__
@@ -394,17 +394,13 @@ void elemwise(double* mat1, double* mat2, double* output_mat, int M, int N) {
 Routine to perform an in-place GEMM operation, i.e., C := alpha*A*B + beta*C
     This version is the naive implementation that I implemented first. 
 */
-int myNaiveGEMM(double* __restrict__ A, double* __restrict__ B,
+int myGEMM(double* __restrict__ A, double* __restrict__ B,
            double* __restrict__ C, double* alpha, double* beta,
            int M, int N, int K) {
 
     /* TODO: Write an efficient GEMM implementation on GPU */
 
-    // here is where I need to implement the CUDA GEMM kernel
-    // - need to dereference alpha and beta via *alpha before using them 
-    // - A, B, C are all device arrays at this point 
-
-    dim3 threadsPerBlock(8, 32);  // 256 threads
+    dim3 threadsPerBlock(BLOCK_SIZE_X, BLOCK_SIZE_Y);  
     int num_blocks_x = (N + threadsPerBlock.x - 1)/threadsPerBlock.x; // N is number of columns
     int num_blocks_y = (M + threadsPerBlock.y - 1)/threadsPerBlock.y; // M is number of rows
     dim3 numBlocks(num_blocks_x, num_blocks_y); 
@@ -417,7 +413,7 @@ int myNaiveGEMM(double* __restrict__ A, double* __restrict__ B,
 Routine to perform an in-place GEMM operation, i.e., C := alpha*A*B + beta*C
     This version follows that described by section 4.2 in the final project handout 1. 
 */
-int myGEMM(double* A, double* B,
+int myGEMM2(double* A, double* B,
            double* C, double* alpha, double* beta,
            int M, int N, int K) {
     /* TODO: Write an efficient GEMM implementation on GPU */
@@ -431,8 +427,8 @@ int myGEMM(double* A, double* B,
     dim3 threadsPerBlock(BLOCK_SIZE, BLOCK_SIZE);  
     int num_blocks_x = (N + threadsPerBlock.x - 1)/threadsPerBlock.x; // N is number of columns of C
     int num_blocks_y = (M + threadsPerBlock.y - 1)/threadsPerBlock.y; // M is number of rows of C
-    // std::cout << num_blocks_x << " and " << num_blocks_y << std::endl; // makes sense for simple cases now 
 
+    // Define grid
     dim3 numBlocks(num_blocks_x, num_blocks_y); 
 
     // Define A, B, C as matrices to faciliate computation
