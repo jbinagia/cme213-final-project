@@ -321,12 +321,11 @@ void GPUfeedforward(NeuralNetwork &nn, double* d_X, int X_n_rows, int X_n_cols,
     myGEMM(d_W0, d_X, d_z1, &alpha, &beta, nn.W[0].n_rows, N, X_n_rows);
 
     // calculate first set of activations
-    arma::mat a1(nn.W[0].n_rows, N);
     GPUsigmoid(d_z1, d_a1, nn.W[0].n_rows, N);
 
     // calculate input to sigmoid.
     GPUrepmat(d_b1, d_z2, nn.b[1].n_rows, N);
-    myGEMM(d_W1, d_a1, d_z2, &alpha, &beta, nn.W[1].n_rows, N, a1.n_rows);
+    myGEMM(d_W1, d_a1, d_z2, &alpha, &beta, nn.W[1].n_rows, N, nn.W[0].n_rows);
 
     // calculate second set of activations
     arma::mat a2(nn.b[1].n_rows, N);
@@ -390,7 +389,7 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
                     const int epochs, const int batch_size, bool grad_check, int print_every,
                     int debug)
 {
-    bool timing = true; 
+    bool timing = false; 
     double start, end; 
     if (timing) start = MPI_Wtime();
 
@@ -654,33 +653,25 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
             if (timing) start = MPI_Wtime();  
             GPUaddition(d_W0, d_dW0, d_W0, 1.0, -learning_rate, nn.W[0].n_rows, nn.W[0].n_cols);
             if (epoch == epochs -1 && batch == num_batches - 1){
-                arma::mat W0(nn.W[0].n_rows, nn.W[0].n_cols);
-                cudaMemcpy(W0.memptr(), d_W0, sizeof(double) * nn.W[0].n_rows * nn.W[0].n_cols, cudaMemcpyDeviceToHost);
-                nn.W[0] = W0;
+                cudaMemcpy(nn.W[0].memptr(), d_W0, sizeof(double) * nn.W[0].n_rows * nn.W[0].n_cols, cudaMemcpyDeviceToHost);
             }
 
             // Gradient descent - W1
             GPUaddition(d_W1, d_dW1, d_W1, 1.0, -learning_rate, nn.W[1].n_rows, nn.W[1].n_cols);
-            if (epoch == epochs -1 && batch == num_batches - 1){
-                arma::mat W1(nn.W[1].n_rows, nn.W[1].n_cols);
-                cudaMemcpy(W1.memptr(), d_W1, sizeof(double) * nn.W[1].n_rows * nn.W[1].n_cols, cudaMemcpyDeviceToHost);
-                nn.W[1] = W1;
+            if (epoch == epochs-1 && batch == num_batches - 1){
+                cudaMemcpy(nn.W[1].memptr(), d_W1, sizeof(double) * nn.W[1].n_rows * nn.W[1].n_cols, cudaMemcpyDeviceToHost);
             }
 
             // Gradient descent - b0
             GPUaddition(d_b0, d_db0, d_b0, 1.0, -learning_rate, nn.b[0].n_rows, nn.b[0].n_cols);
             if (epoch == epochs -1 && batch == num_batches - 1){
-                arma::mat b0(nn.b[0].n_rows, nn.b[0].n_cols);
-                cudaMemcpy(b0.memptr(), d_b0, sizeof(double) * nn.b[0].n_rows * nn.b[0].n_cols, cudaMemcpyDeviceToHost);
-                nn.b[0] = b0;
+                cudaMemcpy(nn.b[0].memptr(), d_b0, sizeof(double) * nn.b[0].n_rows * nn.b[0].n_cols, cudaMemcpyDeviceToHost);
             }
 
             // Gradient descent - b1
             GPUaddition(d_b1, d_db1, d_b1, 1.0, -learning_rate, nn.b[1].n_rows, nn.b[1].n_cols);
             if (epoch == epochs -1 && batch == num_batches - 1){
-                arma::mat b1(nn.b[1].n_rows, nn.b[1].n_cols);
-                cudaMemcpy(b1.memptr(), d_b1, sizeof(double) * nn.b[1].n_rows * nn.b[1].n_cols, cudaMemcpyDeviceToHost);
-                nn.b[1] = b1;
+                cudaMemcpy(nn.b[1].memptr(), d_b1, sizeof(double) * nn.b[1].n_rows * nn.b[1].n_cols, cudaMemcpyDeviceToHost);
             }
             if (timing) end = MPI_Wtime(); 
             if (timing) timings[7] += end - start;  
