@@ -389,8 +389,9 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
                     const int epochs, const int batch_size, bool grad_check, int print_every,
                     int debug)
 {
-    bool timing = true; 
-    double start = MPI_Wtime();
+    bool timing = false; 
+    double start, end; 
+    if (timing) start = MPI_Wtime();
 
     int rank, num_procs;
     MPI_SAFE_CALL(MPI_Comm_size(MPI_COMM_WORLD, &num_procs));
@@ -562,9 +563,9 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
     cudaMemcpy(d_b1, nn.b[1].memptr(), sizeof(double) * nn.b[1].n_rows * nn.b[1].n_cols, cudaMemcpyHostToDevice);
 
     // local variables to be used with MPI_Wtime() to aid in code optimization 
-    std::vector<double> timings(8, 0.0);
-    double end = MPI_Wtime();
-    if (timing && rank==0 && num_procs==1) std::cout << "Time for setup: " << end - start << " seconds" << std::endl;
+    std::vector<double> timings(9, 0.0);
+    if (timing) end = MPI_Wtime();
+    if (timing && rank==0) std::cout << "Time for setup: " << end - start << " seconds" << std::endl;
 
     for (int epoch = 0; epoch < epochs; ++epoch)
     {
@@ -579,29 +580,27 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
              */
 
             // Retrieve my local minibatch for X and y 
-            double start = MPI_Wtime();
+            double start, end; 
+            if (timing) start = MPI_Wtime();
             arma::mat X_batch = my_X_batches[batch];
             arma::mat y_batch = my_y_batches[batch];
-            double end = MPI_Wtime();
+            if (timing) end = MPI_Wtime();
             timings[0] += end - start; 
-            if (timing && rank==0 && num_procs==1) printf("Time for setup in GD for batch %d, epoch %d: %f \n", batch, epoch, end-start);
 
 
             // Transfer X and y to the GPU
-            start = MPI_Wtime(); 
+            if (timing) start = MPI_Wtime(); 
             cudaMemcpy(d_X, X_batch.memptr(), sizeof(double) * X_batch.n_rows * X_batch.n_cols, cudaMemcpyHostToDevice);
             cudaMemcpy(d_y, y_batch.memptr(), sizeof(double) * y_n_rows * minibatch_size, cudaMemcpyHostToDevice);
-            end = MPI_Wtime();
+            if (timing) end = MPI_Wtime();
             timings[1] += end - start; 
-            if (timing && rank==0 && num_procs==1) printf("Time for cudaMemcpy for d_X: %f \n", end-start);
 
 
             // feedforward 
-            start = MPI_Wtime(); 
+            if (timing) start = MPI_Wtime(); 
             GPUfeedforward(nn, d_X, X_batch.n_rows, X_batch.n_cols, d_W0, d_W1, d_b0, d_b1, d_a1, d_yc, d_z1, d_z2);
-            end = MPI_Wtime();  
+            if (timing) end = MPI_Wtime();  
             timings[2] += end - start; 
-            if (timing && rank==0 && num_procs==1) std::cout << "Feedforward: " << end - start << " seconds" << std::endl;
 
 
             // backprop
@@ -614,40 +613,40 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
             GPUbackprop(nn, y_batch, d_y, d_diff, d_yc, y_batch.n_rows, y_batch.n_cols, reg, d_X, d_XT, X_batch.n_cols, d_a1, 
                 d_W0, d_W1, d_W1T, d_my_db1, d_da1, d_dz1_term1, d_dz1_term2, d_dz1, d_my_db0, d_a1T, d_my_dW0, d_my_dW1, num_procs, normalization, timing); 
             timings[3] += *timing; 
-            if (timing && rank==0 && num_procs==1) std::cout << "Backprop: " << end - start << " seconds" << std::endl;
 
 
             // copy local gradients from device to host 
+            if (timing) start = MPI_Wtime();  
             cudaMemcpy(my_dW0, d_my_dW0, sizeof(double) * nn.W[0].n_rows * nn.W[0].n_cols, cudaMemcpyDeviceToHost);
             cudaMemcpy(my_dW1, d_my_dW1, sizeof(double) * nn.W[1].n_rows * nn.W[1].n_cols, cudaMemcpyDeviceToHost);
             cudaMemcpy(my_db0, d_my_db0, sizeof(double) * nn.b[0].n_rows * nn.b[0].n_cols, cudaMemcpyDeviceToHost);
             cudaMemcpy(my_db1, d_my_db1, sizeof(double) * nn.b[1].n_rows * nn.b[1].n_cols, cudaMemcpyDeviceToHost);
+            if (timing) end = MPI_Wtime();  
+            timings[4] += end - start;  
 
 
             // MPI all reduce local gradients
-            start = MPI_Wtime();  
+            if (timing) start = MPI_Wtime();  
             MPI_Allreduce(my_dW0, dW0, nn.W[0].n_rows * nn.W[0].n_cols, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
             MPI_Allreduce(my_dW1, dW1, nn.W[1].n_rows * nn.W[1].n_cols, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
             MPI_Allreduce(my_db0, db0, nn.b[0].n_rows * nn.b[0].n_cols, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
             MPI_Allreduce(my_db1, db1, nn.b[1].n_rows * nn.b[1].n_cols, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
-            end = MPI_Wtime();  
-            timings[4] += end - start; 
-            if (timing && rank==0 && num_procs==1) std::cout << "Allreduce: " << end - start << " seconds" << std::endl;
+            if (timing) end = MPI_Wtime();  
+            timings[5] += end - start; 
 
 
             // transfer reduced gradients to each gpu
-            start = MPI_Wtime();  
+            if (timing) start = MPI_Wtime();  
             cudaMemcpy(d_dW0, dW0, sizeof(double) * nn.W[0].n_rows * nn.W[0].n_cols, cudaMemcpyHostToDevice);
             cudaMemcpy(d_dW1, dW1, sizeof(double) * nn.W[1].n_rows * nn.W[1].n_cols, cudaMemcpyHostToDevice);
             cudaMemcpy(d_db0, db0, sizeof(double) * nn.b[0].n_rows * nn.b[0].n_cols, cudaMemcpyHostToDevice);
             cudaMemcpy(d_db1, db1, sizeof(double) * nn.b[1].n_rows * nn.b[1].n_cols, cudaMemcpyHostToDevice);
-            end = MPI_Wtime(); 
-            timings[5] += end - start;  
-            if (timing && rank==0 && num_procs==1) std::cout << "Transfer gradients to host: " << end - start << " seconds" << std::endl;
+            if (timing) end = MPI_Wtime(); 
+            timings[6] += end - start;  
 
 
             // Gradient descent - W0
-            start = MPI_Wtime();  
+            if (timing) start = MPI_Wtime();  
             GPUaddition(d_W0, d_dW0, d_W0, 1.0, -learning_rate, nn.W[0].n_rows, nn.W[0].n_cols);
             if (epoch == epochs -1 && batch == num_batches - 1){
                 arma::mat W0(nn.W[0].n_rows, nn.W[0].n_cols);
@@ -678,9 +677,8 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
                 cudaMemcpy(b1.memptr(), d_b1, sizeof(double) * nn.b[1].n_rows * nn.b[1].n_cols, cudaMemcpyDeviceToHost);
                 nn.b[1] = b1;
             }
-            end = MPI_Wtime(); 
-            timings[6] += end - start;  
-            if (timing && rank==0 && num_procs==1) std::cout << "GD: " << end - start << " seconds" << std::endl;
+            if (timing) end = MPI_Wtime(); 
+            timings[7] += end - start;  
 
             // determine print_flag
             if (print_every <= 0)
@@ -701,13 +699,12 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
             iter++;
 
             // Calcualte time taken for remainder of this iteration 
-            end = MPI_Wtime();  
-            timings[7] += end - start; 
-            if (timing && rank==0 && num_procs==1) std::cout << "Rest: " << end - start << " seconds" << std::endl;
+            if (timing) end = MPI_Wtime();  
+            timings[8] += end - start; 
         }
     }
 
-    start = MPI_Wtime();  
+    if (timing) start = MPI_Wtime();  
     error_file.close();
 
     // CUDA deallocation
@@ -748,7 +745,7 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
     delete[] my_dW1;
     delete[] my_db0;
     delete[] my_db1;
-    end = MPI_Wtime();  
+    if (timing) end = MPI_Wtime();  
     if (timing && rank==0) std::cout << "cleanup: " << end - start << " seconds" << std::endl;
 
     // calculate total times when trying to optimize code
