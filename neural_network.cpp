@@ -336,9 +336,10 @@ void GPUfeedforward(NeuralNetwork &nn, double* d_X, int X_n_rows, int X_n_cols,
 void GPUbackprop(NeuralNetwork &nn, const arma::mat &y, double* d_y, double* d_diff, double* d_yc, int y_n_rows, int y_n_cols, double reg,
                 double* d_X, double* d_XT, int X_n_cols, double* d_a1, double* d_W0, double* d_W1, double* d_W1T, 
                 double* d_my_db1, double* d_da1, double *d_dz1_term1, double *d_dz1_term2, double *d_dz1, double *d_my_db0, double *d_a1T,
-                double* d_my_dW0, double* d_my_dW1, int num_procs, int normalization, double* timing)
+                double* d_my_dW0, double* d_my_dW1, int num_procs, int normalization, double* time, bool timing)
 {
-    double start = MPI_Wtime();
+    double start, finish; 
+    if (timing) start = MPI_Wtime();
 
     int M = y_n_rows;
     int N = y_n_cols;                        
@@ -375,8 +376,8 @@ void GPUbackprop(NeuralNetwork &nn, const arma::mat &y, double* d_y, double* d_d
     GPUsum(d_dz1, d_my_db0, nn.W[1].n_cols, N, 1);
 
     // calculate time taking in GPUbackprop
-    double finish = MPI_Wtime(); 
-    *timing = finish - start; 
+    if (timing) finish = MPI_Wtime(); 
+    if (timing) *time = finish - start; 
 }
 
 /*
@@ -389,7 +390,7 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
                     const int epochs, const int batch_size, bool grad_check, int print_every,
                     int debug)
 {
-    bool timing = false; 
+    bool timing = true; 
     double start, end; 
     if (timing) start = MPI_Wtime();
 
@@ -585,7 +586,7 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
             arma::mat X_batch = my_X_batches[batch];
             arma::mat y_batch = my_y_batches[batch];
             if (timing) end = MPI_Wtime();
-            timings[0] += end - start; 
+            if (timing) timings[0] += end - start; 
 
 
             // Transfer X and y to the GPU
@@ -593,14 +594,14 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
             cudaMemcpy(d_X, X_batch.memptr(), sizeof(double) * X_batch.n_rows * X_batch.n_cols, cudaMemcpyHostToDevice);
             cudaMemcpy(d_y, y_batch.memptr(), sizeof(double) * y_n_rows * minibatch_size, cudaMemcpyHostToDevice);
             if (timing) end = MPI_Wtime();
-            timings[1] += end - start; 
+            if (timing) timings[1] += end - start; 
 
 
             // feedforward 
             if (timing) start = MPI_Wtime(); 
             GPUfeedforward(nn, d_X, X_batch.n_rows, X_batch.n_cols, d_W0, d_W1, d_b0, d_b1, d_a1, d_yc, d_z1, d_z2);
             if (timing) end = MPI_Wtime();  
-            timings[2] += end - start; 
+            if (timing) timings[2] += end - start; 
 
 
             // backprop
@@ -609,10 +610,10 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
                 normalization = X_n_cols - (num_batches - 1) * batch_size;
             GPUtranspose(d_X, d_XT, X_batch.n_rows, X_batch.n_cols);
             GPUtranspose(d_W1, d_W1T, nn.W[1].n_rows, nn.W[1].n_cols);
-            double myvar = 0.0, *timing = &myvar;
+            double myvar = 0.0, *time = &myvar;
             GPUbackprop(nn, y_batch, d_y, d_diff, d_yc, y_batch.n_rows, y_batch.n_cols, reg, d_X, d_XT, X_batch.n_cols, d_a1, 
-                d_W0, d_W1, d_W1T, d_my_db1, d_da1, d_dz1_term1, d_dz1_term2, d_dz1, d_my_db0, d_a1T, d_my_dW0, d_my_dW1, num_procs, normalization, timing); 
-            timings[3] += *timing; 
+                d_W0, d_W1, d_W1T, d_my_db1, d_da1, d_dz1_term1, d_dz1_term2, d_dz1, d_my_db0, d_a1T, d_my_dW0, d_my_dW1, num_procs, normalization, time, timing); 
+            if (timing) timings[3] += *time; 
 
 
             // copy local gradients from device to host 
@@ -622,7 +623,7 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
             cudaMemcpy(my_db0, d_my_db0, sizeof(double) * nn.b[0].n_rows * nn.b[0].n_cols, cudaMemcpyDeviceToHost);
             cudaMemcpy(my_db1, d_my_db1, sizeof(double) * nn.b[1].n_rows * nn.b[1].n_cols, cudaMemcpyDeviceToHost);
             if (timing) end = MPI_Wtime();  
-            timings[4] += end - start;  
+            if (timing) timings[4] += end - start;  
 
 
             // MPI all reduce local gradients
@@ -632,7 +633,7 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
             MPI_Allreduce(my_db0, db0, nn.b[0].n_rows * nn.b[0].n_cols, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
             MPI_Allreduce(my_db1, db1, nn.b[1].n_rows * nn.b[1].n_cols, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
             if (timing) end = MPI_Wtime();  
-            timings[5] += end - start; 
+            if (timing) timings[5] += end - start; 
 
 
             // transfer reduced gradients to each gpu
@@ -642,7 +643,7 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
             cudaMemcpy(d_db0, db0, sizeof(double) * nn.b[0].n_rows * nn.b[0].n_cols, cudaMemcpyHostToDevice);
             cudaMemcpy(d_db1, db1, sizeof(double) * nn.b[1].n_rows * nn.b[1].n_cols, cudaMemcpyHostToDevice);
             if (timing) end = MPI_Wtime(); 
-            timings[6] += end - start;  
+            if (timing) timings[6] += end - start;  
 
 
             // Gradient descent - W0
@@ -678,7 +679,7 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
                 nn.b[1] = b1;
             }
             if (timing) end = MPI_Wtime(); 
-            timings[7] += end - start;  
+            if (timing) timings[7] += end - start;  
 
             // determine print_flag
             if (print_every <= 0)
@@ -700,7 +701,7 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
 
             // Calcualte time taken for remainder of this iteration 
             if (timing) end = MPI_Wtime();  
-            timings[8] += end - start; 
+            if (timing) timings[8] += end - start; 
         }
     }
 
@@ -749,10 +750,12 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
     if (timing && rank==0) std::cout << "cleanup: " << end - start << " seconds" << std::endl;
 
     // calculate total times when trying to optimize code
-    for (int i = 0; i < timings.size(); i++)
-    {
-        double reduced_time = 0.0; 
-        MPI_Reduce(&timings[i], &reduced_time, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
-        if (timing && rank==0) std::cout << "time " << i << ": " << reduced_time/num_procs << " seconds" << std::endl;
+    if (timing){
+        for (int i = 0; i < timings.size(); i++)
+        {
+            double reduced_time = 0.0; 
+            MPI_Reduce(&timings[i], &reduced_time, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+            if (timing && rank==0) std::cout << "time " << i << ": " << reduced_time/num_procs << " seconds" << std::endl;
+        }
     }
 }
