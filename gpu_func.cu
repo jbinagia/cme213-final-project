@@ -7,8 +7,8 @@
 #include "utils/common.h"
 
 // Thread block size for myGEMM
-#define BLOCK_SIZE_X 4
-#define BLOCK_SIZE_Y 32
+#define BLOCK_SIZE_X 8
+#define BLOCK_SIZE_Y 64
 #define BLOCK_SIZE 16  // for myGEMM 4.1 implementation 
 
 __global__
@@ -394,7 +394,7 @@ void elemwise(double* mat1, double* mat2, double* output_mat, int M, int N) {
 Routine to perform an in-place GEMM operation, i.e., C := alpha*A*B + beta*C
     This version is the naive implementation that I implemented first. 
 */
-int myGEMM(double* __restrict__ A, double* __restrict__ B,
+int myNaiveGEMM(double* __restrict__ A, double* __restrict__ B,
            double* __restrict__ C, double* alpha, double* beta,
            int M, int N, int K) {
 
@@ -413,7 +413,7 @@ int myGEMM(double* __restrict__ A, double* __restrict__ B,
 Routine to perform an in-place GEMM operation, i.e., C := alpha*A*B + beta*C
     This version follows that described by section 4.2 in the final project handout 1. 
 */
-int myGEMM2(double* A, double* B,
+int myGEMM(double* A, double* B,
            double* C, double* alpha, double* beta,
            int M, int N, int K) {
     /* TODO: Write an efficient GEMM implementation on GPU */
