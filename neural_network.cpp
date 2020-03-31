@@ -333,7 +333,7 @@ void GPUfeedforward(NeuralNetwork &nn, double* d_X, int X_n_rows, int X_n_cols,
     GPUsoftmax(d_z2, d_yc, a2.n_rows, a2.n_cols);
 }
 
-void GPUbackprop(NeuralNetwork &nn, const arma::mat &y, double* d_y, double* d_diff, double* d_yc, int y_n_rows, int y_n_cols, double reg,
+void GPUbackprop(NeuralNetwork &nn, double* d_y, double* d_diff, double* d_yc, int y_n_rows, int y_n_cols, double reg,
                 double* d_X, double* d_XT, int X_n_cols, double* d_a1, double* d_W0, double* d_W1, double* d_W1T, 
                 double* d_my_db1, double* d_da1, double *d_dz1_term1, double *d_dz1_term2, double *d_dz1, double *d_my_db0, double *d_a1T,
                 double* d_my_dW0, double* d_my_dW1, int num_procs, int normalization, double* time, bool timing)
@@ -583,23 +583,27 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
             // Retrieve my local minibatch for X and y 
             double start, end; 
             if (timing) start = MPI_Wtime();
-            arma::mat X_batch = my_X_batches[batch];
-            arma::mat y_batch = my_y_batches[batch];
+            double *X_batch_memptr = my_X_batches[batch].memptr();
+            double *y_batch_memptr = my_y_batches[batch].memptr();
+            int X_batch_n_rows = my_X_batches[batch].n_rows;
+            int X_batch_n_cols = my_X_batches[batch].n_cols;
+            int y_batch_n_rows = my_y_batches[batch].n_rows;
+            int y_batch_n_cols = my_y_batches[batch].n_cols; 
             if (timing) end = MPI_Wtime();
             if (timing) timings[0] += end - start; 
 
 
             // Transfer X and y to the GPU
             if (timing) start = MPI_Wtime(); 
-            cudaMemcpy(d_X, X_batch.memptr(), sizeof(double) * X_batch.n_rows * X_batch.n_cols, cudaMemcpyHostToDevice);
-            cudaMemcpy(d_y, y_batch.memptr(), sizeof(double) * y_n_rows * minibatch_size, cudaMemcpyHostToDevice);
+            cudaMemcpy(d_X, X_batch_memptr, sizeof(double) * X_batch_n_rows * X_batch_n_cols, cudaMemcpyHostToDevice);
+            cudaMemcpy(d_y, y_batch_memptr, sizeof(double) * y_n_rows * minibatch_size, cudaMemcpyHostToDevice);
             if (timing) end = MPI_Wtime();
             if (timing) timings[1] += end - start; 
 
 
             // feedforward 
             if (timing) start = MPI_Wtime(); 
-            GPUfeedforward(nn, d_X, X_batch.n_rows, X_batch.n_cols, d_W0, d_W1, d_b0, d_b1, d_a1, d_yc, d_z1, d_z2);
+            GPUfeedforward(nn, d_X, X_batch_n_rows, X_batch_n_cols, d_W0, d_W1, d_b0, d_b1, d_a1, d_yc, d_z1, d_z2);
             if (timing) end = MPI_Wtime();  
             if (timing) timings[2] += end - start; 
 
@@ -608,10 +612,10 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
             int normalization = batch_size;
             if (batch == num_batches-1)     // the last batch is potentially smaller than the others so the normalization factor must be adjusted
                 normalization = X_n_cols - (num_batches - 1) * batch_size;
-            GPUtranspose(d_X, d_XT, X_batch.n_rows, X_batch.n_cols);
+            GPUtranspose(d_X, d_XT, X_batch_n_rows, X_batch_n_cols);
             GPUtranspose(d_W1, d_W1T, nn.W[1].n_rows, nn.W[1].n_cols);
             double myvar = 0.0, *time = &myvar;
-            GPUbackprop(nn, y_batch, d_y, d_diff, d_yc, y_batch.n_rows, y_batch.n_cols, reg, d_X, d_XT, X_batch.n_cols, d_a1, 
+            GPUbackprop(nn, d_y, d_diff, d_yc, y_batch_n_rows, y_batch_n_cols, reg, d_X, d_XT, X_batch_n_cols, d_a1, 
                 d_W0, d_W1, d_W1T, d_my_db1, d_da1, d_dz1_term1, d_dz1_term2, d_dz1, d_my_db0, d_a1T, d_my_dW0, d_my_dW1, num_procs, normalization, time, timing); 
             if (timing) timings[3] += *time; 
 
