@@ -461,7 +461,8 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
 
     for (int i = 0; i < num_procs; i++)
     {
-        int last_batch_size = X_n_cols - (num_batches-1)*batch_size;
+        // int last_batch_size = X_n_cols - (num_batches-1)*batch_size;
+        int last_batch_size = X_n_cols - minibatch_size*num_procs*(num_batches - 1);
         int last_minibatch_size = (last_batch_size + num_procs - 1) / num_procs; // new minibatch size for this last batch. last process gets the least.
 
         displs_x[i] = X_n_rows * last_minibatch_size * i + X_n_rows * (num_batches - 1) * batch_size;
