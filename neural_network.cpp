@@ -440,12 +440,12 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
     arma::mat my_X(X_n_rows, minibatch_size);
     arma::mat my_y(y_n_rows, minibatch_size);
     for (int batch = 0; batch < num_batches-1; ++batch){
-        arma::mat X_batch(X_n_rows, batch_size);
-        arma::mat y_batch(y_n_rows, batch_size);
+        arma::mat X_batch(X_n_rows, minibatch_size*num_procs);
+        arma::mat y_batch(y_n_rows, minibatch_size * num_procs);
         if (rank==0){
-            int last_col = std::min((batch + 1) * batch_size - 1, N - 1);
-            X_batch = X.cols(batch * batch_size, last_col);
-            y_batch = y.cols(batch * batch_size, last_col);
+            int last_col = std::min((batch + 1) * minibatch_size * num_procs - 1, N - 1);
+            X_batch = X.cols(batch * minibatch_size * num_procs, last_col);
+            y_batch = y.cols(batch * minibatch_size * num_procs, last_col);
         }
         MPI_Scatter(X_batch.memptr(), X_n_rows * minibatch_size, MPI_DOUBLE, my_X.memptr(), X_n_rows * minibatch_size, MPI_DOUBLE, 0, MPI_COMM_WORLD);
         MPI_Scatter(y_batch.memptr(), y_n_rows * minibatch_size, MPI_DOUBLE, my_y.memptr(), y_n_rows * minibatch_size, MPI_DOUBLE, 0, MPI_COMM_WORLD);
@@ -609,7 +609,7 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
 
 
             // backprop
-            int normalization = batch_size;
+            int normalization = minibatch_size * num_procs;
             if (batch == num_batches-1)     // the last batch is potentially smaller than the others so the normalization factor must be adjusted
                 normalization = X_n_cols - minibatch_size * num_procs * (num_batches - 1);
             GPUtranspose(d_X, d_XT, X_batch_n_rows, X_batch_n_cols);
