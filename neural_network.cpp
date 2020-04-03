@@ -611,7 +611,7 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
             // backprop
             int normalization = batch_size;
             if (batch == num_batches-1)     // the last batch is potentially smaller than the others so the normalization factor must be adjusted
-                normalization = X_n_cols - (num_batches - 1) * batch_size;
+                normalization = X_n_cols - minibatch_size * num_procs * (num_batches - 1);
             GPUtranspose(d_X, d_XT, X_batch_n_rows, X_batch_n_cols);
             GPUtranspose(d_W1, d_W1T, nn.W[1].n_rows, nn.W[1].n_cols);
             double myvar = 0.0, *time = &myvar;
