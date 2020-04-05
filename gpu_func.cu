@@ -203,18 +203,13 @@ void gpuGEMM4d1(const Matrix A, const Matrix B, Matrix C, double alpha, double b
     // Get thread's row and column in the block
     int row = threadIdx.y;
     int col = threadIdx.x;
-    // assert(row < M);
-    // assert(col < N); 
 
     // Get thread's row and column in C as a whole (to be used later)
     int myRowInC = (blockIdx.y * blockDim.y) + threadIdx.y; 
     int myColInC = (blockIdx.x * blockDim.x) + threadIdx.x;
 
     // Calculate Csub by looping over required submatrices of A and B and accumulating result
-    int numSubMatrices = (K + BLOCK_SIZE - 1)/BLOCK_SIZE; // TODO: fix num_iters in 4.2 like this
-    // if (row==0 && col == 0){
-    //     printf("There will be %d inner iterations\n", numSubMatrices);
-    // }
+    int numSubMatrices = (K + BLOCK_SIZE - 1)/BLOCK_SIZE; // TODO: define num_iters in 4.2 like this
     for (int m = 0; m < numSubMatrices; m++){
 
         // Retrieve corresponding sub-matrix Asub of A 
@@ -231,9 +226,6 @@ void gpuGEMM4d1(const Matrix A, const Matrix B, Matrix C, double alpha, double b
         // be careful with the column index of Asub, row index of bsub
         int projectedFinalRowB = (m+1)*BLOCK_SIZE - 1; 
         int lmax = (projectedFinalRowB > K-1) ? (K - BLOCK_SIZE*m) :  BLOCK_SIZE; 
-        // if (row==0 && col == 0){
-        //     printf("(m=%d) lmax = %d\n", m, lmax);
-        // }
 
         // Load elements of Asub and Bsub into shared memory 
         if (myRowInC < M && col < lmax) As[row][col] = GetElement(Asub, row, col); 
@@ -243,7 +235,7 @@ void gpuGEMM4d1(const Matrix A, const Matrix B, Matrix C, double alpha, double b
         __syncthreads();
 
         // Perform computation: i.e. multiply Asub and Bsub together 
-        //  note: we don't check myRowInC < M && myColInC < N here since the thread diverge leads 
+        //  note: we don't check myRowInC < M && myColInC < N here since the thread divergence leads 
         //  to a very slight loss in performance
         for (int l = 0; l < lmax; l++){
             Cvalue += alpha*As[row][l]*Bs[l][col];
