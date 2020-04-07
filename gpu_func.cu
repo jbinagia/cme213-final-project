@@ -72,6 +72,73 @@ Matrix GetSubMatrix(Matrix B, int row, int col, int height, int width)
     return Bsub;
 }
 
+__global__
+void gpuGEMM4d1(const Matrix A, const Matrix B, Matrix C, double alpha, double beta,
+           int M, int N, int K) {
+    
+    // Indices of this particular block in the grid of thread blocks 
+    int blockRow = blockIdx.y;
+    int blockCol = blockIdx.x;
+
+    // Retrieve the sub-matrix Csub that this block will compute 
+    Matrix Csub = GetSubMatrix(C, blockRow, blockCol, BLOCK_SIZE, BLOCK_SIZE);
+
+    // Value in Csub that this thread is responsible for 
+    double Cvalue = 0; 
+
+    // Get thread's row and column in the block
+        // note that we map threadIdx.x to row and threadIdx.y to enable
+        // coalesced memory accesses for global memory 
+    int row = threadIdx.x;
+    int col = threadIdx.y;
+
+    // Get thread's row and column in C as a whole (to be used later)
+    int myRowInC = (blockIdx.y * blockDim.y) + row; 
+    int myColInC = (blockIdx.x * blockDim.x) + col;
+
+    // Calculate Csub by looping over required submatrices of A and B and accumulating result
+    int numSubMatrices = (K + BLOCK_SIZE - 1)/BLOCK_SIZE; // TODO: define num_iters in 4.2 like this
+    for (int m = 0; m < numSubMatrices; m++){
+
+        // Retrieve corresponding sub-matrix Asub of A 
+        Matrix Asub = GetSubMatrix(A, blockRow, m, BLOCK_SIZE, BLOCK_SIZE);
+
+        // Retrieve corresponding sub-matrix Bsub of B
+        Matrix Bsub = GetSubMatrix(B, m, blockCol, BLOCK_SIZE, BLOCK_SIZE);
+
+        // Allocate shared memory for Asub and Bsub 
+        __shared__ double As[BLOCK_SIZE][BLOCK_SIZE+1]; // BLOCK_SIZE+1 to prevent strided access
+        __shared__ double Bs[BLOCK_SIZE][BLOCK_SIZE+1]; 
+
+        // If the inner dimension K is not divisible by BLOCK_SIZE, we want to 
+        // be careful with the column index of Asub, row index of bsub
+        int projectedFinalRowB = (m+1)*BLOCK_SIZE - 1; 
+        int lmax = (projectedFinalRowB > K-1) ? (K - BLOCK_SIZE*m) :  BLOCK_SIZE; 
+
+        // Load elements of Asub and Bsub into shared memory 
+        if (myRowInC < M && col < lmax) As[row][col] = GetElement(Asub, row, col); 
+        if (row < lmax && myColInC < N) Bs[row][col] = GetElement(Bsub, row, col); 
+
+        // Synchronize threads before doing computation 
+        __syncthreads();
+
+        // Perform computation: i.e. multiply Asub and Bsub together 
+        //  note: we don't check myRowInC < M && myColInC < N here since the thread divergence leads 
+        //  to a very slight loss in performance
+        for (int l = 0; l < lmax; l++){
+            Cvalue += alpha*As[row][l]*Bs[l][col];
+        }
+
+        // Synchronize threads before loading new data into shared memory on next loop iteration 
+        __syncthreads();
+    }
+
+    // Write my element of Csub to memory 
+    if (myRowInC < M && myColInC < N)
+        Csub.elements[col * Csub.stride + row] = beta*Csub.elements[col * Csub.stride + row] + Cvalue;
+
+}
+
 
 __global__
 void gpuGEMM4d2(const Matrix A, const Matrix B, Matrix C, double alpha, double beta,
@@ -186,70 +253,6 @@ void gpuGEMM4d2(const Matrix A, const Matrix B, Matrix C, double alpha, double b
 
 }
 
-__global__
-void gpuGEMM4d1(const Matrix A, const Matrix B, Matrix C, double alpha, double beta,
-           int M, int N, int K) {
-    
-    // Indices of this particular block in the grid of thread blocks 
-    int blockRow = blockIdx.y;
-    int blockCol = blockIdx.x;
-
-    // Retrieve the sub-matrix Csub that this block will compute 
-    Matrix Csub = GetSubMatrix(C, blockRow, blockCol, BLOCK_SIZE, BLOCK_SIZE);
-
-    // Value in Csub that this thread is responsible for 
-    double Cvalue = 0; 
-
-    // Get thread's row and column in the block
-    int row = threadIdx.y;
-    int col = threadIdx.x;
-
-    // Get thread's row and column in C as a whole (to be used later)
-    int myRowInC = (blockIdx.y * blockDim.y) + threadIdx.y; 
-    int myColInC = (blockIdx.x * blockDim.x) + threadIdx.x;
-
-    // Calculate Csub by looping over required submatrices of A and B and accumulating result
-    int numSubMatrices = (K + BLOCK_SIZE - 1)/BLOCK_SIZE; // TODO: define num_iters in 4.2 like this
-    for (int m = 0; m < numSubMatrices; m++){
-
-        // Retrieve corresponding sub-matrix Asub of A 
-        Matrix Asub = GetSubMatrix(A, blockRow, m, BLOCK_SIZE, BLOCK_SIZE);
-
-        // Retrieve corresponding sub-matrix Bsub of B
-        Matrix Bsub = GetSubMatrix(B, m, blockCol, BLOCK_SIZE, BLOCK_SIZE);
-
-        // Allocate shared memory for Asub and Bsub 
-        __shared__ double As[BLOCK_SIZE][BLOCK_SIZE]; 
-        __shared__ double Bs[BLOCK_SIZE][BLOCK_SIZE]; 
-
-        // If the inner dimension K is not divisible by BLOCK_SIZE, we want to 
-        // be careful with the column index of Asub, row index of bsub
-        int projectedFinalRowB = (m+1)*BLOCK_SIZE - 1; 
-        int lmax = (projectedFinalRowB > K-1) ? (K - BLOCK_SIZE*m) :  BLOCK_SIZE; 
-
-        // Load elements of Asub and Bsub into shared memory 
-        if (myRowInC < M && col < lmax) As[row][col] = GetElement(Asub, row, col); 
-        if (row < lmax && myColInC < N) Bs[row][col] = GetElement(Bsub, row, col); 
-
-        // Synchronize threads before doing computation 
-        __syncthreads();
-
-        // Perform computation: i.e. multiply Asub and Bsub together 
-        //  note: we don't check myRowInC < M && myColInC < N here since the thread divergence leads 
-        //  to a very slight loss in performance
-        for (int l = 0; l < lmax; l++){
-            Cvalue += alpha*As[row][l]*Bs[l][col];
-        }
-
-        // Synchronize threads before loading new data into shared memory on next loop iteration 
-        __syncthreads();
-    }
-
-    // Write my element of Csub to memory 
-    if (myRowInC < M && myColInC < N)
-        Csub.elements[col * Csub.stride + row] = beta*Csub.elements[col * Csub.stride + row] + Cvalue;
-
-}
 
 __global__
 void naiveGEMM(double* __restrict__ A, double* __restrict__ B,
