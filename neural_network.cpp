@@ -333,15 +333,15 @@ void GPUfeedforward(NeuralNetwork &nn, double* d_X, int X_n_rows, int X_n_cols,
 }
 
 void GPUbackprop(NeuralNetwork &nn, double* d_y, double* d_diff, double* d_yc, int y_n_rows, int y_n_cols, double reg,
-                double* d_X, double* d_XT, int X_n_cols, double* d_a1, double* d_W0, double* d_W1, double* d_W1T, 
+                double* d_X, double* d_XT, int X_n_cols, double* d_a1, double* d_W0, double* d_W1, double* d_W1T,
                 double* d_my_db1, double* d_da1, double *d_dz1_term1, double *d_dz1_term2, double *d_dz1, double *d_my_db0, double *d_a1T,
                 double* d_my_dW0, double* d_my_dW1, int num_procs, int normalization, double* time, bool timing)
 {
-    double start, finish; 
+    double start, finish;
     if (timing) start = MPI_Wtime();
 
     int M = y_n_rows;
-    int N = y_n_cols;                        
+    int N = y_n_cols;
     reg = reg/(double(num_procs)); // account for variable number of processes
 
     // CUDA declarations, allocations, memcpy to device
@@ -375,8 +375,8 @@ void GPUbackprop(NeuralNetwork &nn, double* d_y, double* d_diff, double* d_yc, i
     GPUsum(d_dz1, d_my_db0, nn.W[1].n_cols, N, 1);
 
     // calculate time taking in GPUbackprop
-    if (timing) finish = MPI_Wtime(); 
-    if (timing) *time = finish - start; 
+    if (timing) finish = MPI_Wtime();
+    if (timing) *time = finish - start;
 }
 
 /*
@@ -389,8 +389,8 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
                     const int epochs, const int batch_size, bool grad_check, int print_every,
                     int debug)
 {
-    bool timing = false; 
-    double start, end; 
+    bool timing = false;
+    double start, end;
     if (timing) start = MPI_Wtime();
 
     int rank, num_procs;
@@ -428,45 +428,88 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
     MPI_Bcast(&X_n_cols, 1, MPI_INT, 0, MPI_COMM_WORLD);
     MPI_Bcast(&y_n_rows, 1, MPI_INT, 0, MPI_COMM_WORLD);
 
-    // define useful constants 
+    // define useful constants
     int num_batches = (N + batch_size - 1) / batch_size; // number of batches there will be (last batch is of size <= batch_size)
     int minibatch_size = (batch_size + num_procs - 1) / num_procs; // given a batch size, how many training examples to distribute to each process
 
-    // define data structure to hold each process's input data. The i-th entry to these vectors corresponds to batch # i. 
+    // define data structure to hold each process's input data. The i-th entry to these vectors corresponds to batch # i.
     std::vector<arma::mat> my_X_batches;
     std::vector<arma::mat> my_y_batches;
-
-    // for each batch up to the last batch, scatter the data and place into my_X_batches and my_y_bathes
-    arma::mat my_X(X_n_rows, minibatch_size);
-    arma::mat my_y(y_n_rows, minibatch_size);
-    for (int batch = 0; batch < num_batches-1; ++batch){
-        arma::mat X_batch(X_n_rows, minibatch_size*num_procs);
-        arma::mat y_batch(y_n_rows, minibatch_size * num_procs);
-        if (rank==0){
-            int last_col = std::min((batch + 1) * minibatch_size * num_procs - 1, N - 1);
-            X_batch = X.cols(batch * minibatch_size * num_procs, last_col);
-            y_batch = y.cols(batch * minibatch_size * num_procs, last_col);
-        }
-        MPI_Scatter(X_batch.memptr(), X_n_rows * minibatch_size, MPI_DOUBLE, my_X.memptr(), X_n_rows * minibatch_size, MPI_DOUBLE, 0, MPI_COMM_WORLD);
-        MPI_Scatter(y_batch.memptr(), y_n_rows * minibatch_size, MPI_DOUBLE, my_y.memptr(), y_n_rows * minibatch_size, MPI_DOUBLE, 0, MPI_COMM_WORLD);
-        my_X_batches.push_back(my_X);
-        my_y_batches.push_back(my_y);
-    }
 
     // displacements and counts to be used for scatterv below (both in terms of # of elements)
     int *displs_x = new int[num_procs];
     int *displs_y = new int[num_procs];
     int *counts_x = new int[num_procs];
     int *counts_y = new int[num_procs];
+    int recv_count_x;
+    int recv_count_y;
 
+    // for each batch up to the last batch, scatter the data and place into my_X_batches and my_y_bathes
+    if (batch_size % num_procs == 0){ // if batch_size is a multiple of num_procs, we can simply use MPI_Scatter
+      arma::mat my_X(X_n_rows, minibatch_size);
+      arma::mat my_y(y_n_rows, minibatch_size);
+      for (int batch = 0; batch < num_batches-1; ++batch){
+          arma::mat X_batch(X_n_rows, batch_size);
+          arma::mat y_batch(y_n_rows, batch_size);
+          if (rank==0){
+              int last_col = std::min((batch + 1) * batch_size - 1, N - 1);
+              X_batch = X.cols(batch * batch_size, last_col);
+              y_batch = y.cols(batch * batch_size, last_col);
+          }
+          MPI_Scatter(X_batch.memptr(), X_n_rows * minibatch_size, MPI_DOUBLE, my_X.memptr(), X_n_rows * minibatch_size, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+          MPI_Scatter(y_batch.memptr(), y_n_rows * minibatch_size, MPI_DOUBLE, my_y.memptr(), y_n_rows * minibatch_size, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+          my_X_batches.push_back(my_X);
+          my_y_batches.push_back(my_y);
+      }
+    }else{
+      if (rank==num_procs-1){ // last process has a different size (fewer)
+        int new_minibatch_size = batch_size - (num_procs-1)*minibatch_size
+      }else{
+        int new_minibatch_size = minibatch_size
+      }
+
+      // calculate how many elements to send to each process
+      for (int i = 0; i < num_procs; i++)
+      {
+        if (i == num_procs - 1){
+          counts_x[i] = X_n_rows * (batch_size - (num_procs-1)*minibatch_size);
+          counts_y[i] = y_n_rows * (batch_size - (num_procs-1)*minibatch_size);
+        }else{
+          counts_x[i] = X_n_rows * minibatch_size;
+          counts_y[i] = y_n_rows * minibatch_size;
+        }
+      }
+      recv_count_x = counts_x[rank];
+      recv_count_y = counts_y[rank];
+
+      // for each batch, scatter data to each process
+      for (int batch = 0; batch < num_batches-1; ++batch){
+          // arma::mat X_batch(X_n_rows, batch_size);
+          // arma::mat y_batch(y_n_rows, batch_size);
+          for (int i = 0; i < num_procs; i++)
+          {
+            displs_x[i] = X_n_rows * minibatch_size * i + X_n_rows * batch * batch_size;
+            displs_y[i] = y_n_rows * minibatch_size * i + y_n_rows * batch * batch_size;
+          }
+
+          arma::mat my_X(X_n_rows, new_minibatch_size);
+          arma::mat my_y(y_n_rows, new_minibatch_size);
+          MPI_Scatterv(X.memptr(), counts_x, displs_x, MPI_DOUBLE, my_X.memptr(), recv_count_x, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+          MPI_Scatterv(y.memptr(), counts_y, displs_y, MPI_DOUBLE, my_y.memptr(), recv_count_y, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+          my_X_batches.push_back(my_X);
+          my_y_batches.push_back(my_y);
+      }
+    }
+
+    // scatterv for final batch
     for (int i = 0; i < num_procs; i++)
     {
         // int last_batch_size = X_n_cols - (num_batches-1)*batch_size;
         int last_batch_size = X_n_cols - minibatch_size*num_procs*(num_batches - 1);
         int last_minibatch_size = (last_batch_size + num_procs - 1) / num_procs; // new minibatch size for this last batch. last process gets the least.
 
-        displs_x[i] = X_n_rows * last_minibatch_size * i + X_n_rows * (num_batches - 1) * minibatch_size * num_procs;
-        displs_y[i] = y_n_rows * last_minibatch_size * i + y_n_rows * (num_batches - 1) * minibatch_size * num_procs;
+        displs_x[i] = X_n_rows * last_minibatch_size * i + X_n_rows * (num_batches - 1) * batch_size;
+        displs_y[i] = y_n_rows * last_minibatch_size * i + y_n_rows * (num_batches - 1) * batch_size;
 
         if (last_batch_size % num_procs != 0 && i == num_procs - 1)
         { // if the last process needs to be assigned a few less columns
@@ -480,9 +523,9 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
         }
     }
 
-    // calc how many elements I expect to receive given my rank 
-    int recv_count_x = counts_x[rank];
-    int recv_count_y = counts_y[rank];
+    // calc how many elements I expect to receive given my rank
+    recv_count_x = counts_x[rank];
+    recv_count_y = counts_y[rank];
 
     // Use scatterv to scatter input data to different processes for the final batch
     arma::mat my_last_X(X_n_rows, recv_count_x / X_n_rows);
@@ -533,14 +576,14 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
     double *d_my_db1;
     double *d_my_db0;
     cudaMalloc((void **)&d_my_dW1, sizeof(double) * nn.W[1].n_rows * nn.W[1].n_cols);
-    cudaMalloc((void **)&d_my_dW0, sizeof(double) * nn.W[0].n_rows * nn.W[0].n_cols); 
-    cudaMalloc((void **)&d_my_db1, sizeof(double) * y_n_rows * 1); 
-    cudaMalloc((void **)&d_my_db0, sizeof(double) * nn.W[1].n_cols * 1); 
-    cudaMalloc((void **)&d_da1, sizeof(double) * nn.W[1].n_cols * minibatch_size); 
-    cudaMalloc((void **)&d_dz1_term1, sizeof(double) * nn.W[1].n_cols * minibatch_size); 
-    cudaMalloc((void **)&d_dz1_term2, sizeof(double) * nn.W[1].n_cols * minibatch_size); 
-    cudaMalloc((void **)&d_dz1, sizeof(double) * nn.W[1].n_cols * minibatch_size); 
-    cudaMalloc((void **)&d_a1T, sizeof(double) * X_n_cols * nn.b[0].n_rows); 
+    cudaMalloc((void **)&d_my_dW0, sizeof(double) * nn.W[0].n_rows * nn.W[0].n_cols);
+    cudaMalloc((void **)&d_my_db1, sizeof(double) * y_n_rows * 1);
+    cudaMalloc((void **)&d_my_db0, sizeof(double) * nn.W[1].n_cols * 1);
+    cudaMalloc((void **)&d_da1, sizeof(double) * nn.W[1].n_cols * minibatch_size);
+    cudaMalloc((void **)&d_dz1_term1, sizeof(double) * nn.W[1].n_cols * minibatch_size);
+    cudaMalloc((void **)&d_dz1_term2, sizeof(double) * nn.W[1].n_cols * minibatch_size);
+    cudaMalloc((void **)&d_dz1, sizeof(double) * nn.W[1].n_cols * minibatch_size);
+    cudaMalloc((void **)&d_a1T, sizeof(double) * X_n_cols * nn.b[0].n_rows);
     cudaMalloc((void **)&d_z1, sizeof(double) * nn.b[0].n_rows * N);
     cudaMalloc((void **)&d_z2, sizeof(double) * nn.b[1].n_rows * N);
     cudaMalloc((void **)&d_yc, sizeof(double) * nn.b[1].n_rows * N);
@@ -551,7 +594,7 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
     cudaMalloc((void **)&d_W1, sizeof(double) * nn.W[1].n_rows * nn.W[1].n_cols);
     cudaMalloc((void **)&d_dW0, sizeof(double) * nn.W[0].n_rows * nn.W[0].n_cols);
     cudaMalloc((void **)&d_dW1, sizeof(double) * nn.W[1].n_rows * nn.W[1].n_cols);
-    cudaMalloc((void **)&d_W1T, sizeof(double) * nn.W[1].n_cols * nn.W[1].n_rows); 
+    cudaMalloc((void **)&d_W1T, sizeof(double) * nn.W[1].n_cols * nn.W[1].n_rows);
     cudaMalloc((void **)&d_b0, sizeof(double) * nn.b[0].n_rows * nn.b[0].n_cols);
     cudaMalloc((void **)&d_b1, sizeof(double) * nn.b[1].n_rows * nn.b[1].n_cols);
     cudaMalloc((void **)&d_db0, sizeof(double) * nn.b[0].n_rows * nn.b[0].n_cols);
@@ -563,7 +606,7 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
     cudaMemcpy(d_b0, nn.b[0].memptr(), sizeof(double) * nn.b[0].n_rows * nn.b[0].n_cols, cudaMemcpyHostToDevice);
     cudaMemcpy(d_b1, nn.b[1].memptr(), sizeof(double) * nn.b[1].n_rows * nn.b[1].n_cols, cudaMemcpyHostToDevice);
 
-    // local variables to be used with MPI_Wtime() to aid in code optimization 
+    // local variables to be used with MPI_Wtime() to aid in code optimization
     std::vector<double> timings(9, 0.0);
     if (timing) end = MPI_Wtime();
     if (timing && rank==0) std::cout << "Time for setup: " << end - start << " seconds" << std::endl;
@@ -580,78 +623,78 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
              * 4. update local network coefficient at each node
              */
 
-            // Retrieve my local minibatch for X and y 
-            double start, end; 
+            // Retrieve my local minibatch for X and y
+            double start, end;
             if (timing) start = MPI_Wtime();
             double *X_batch_memptr = my_X_batches[batch].memptr();
             double *y_batch_memptr = my_y_batches[batch].memptr();
             int X_batch_n_rows = my_X_batches[batch].n_rows;
             int X_batch_n_cols = my_X_batches[batch].n_cols;
             int y_batch_n_rows = my_y_batches[batch].n_rows;
-            int y_batch_n_cols = my_y_batches[batch].n_cols; 
+            int y_batch_n_cols = my_y_batches[batch].n_cols;
             if (timing) end = MPI_Wtime();
-            if (timing) timings[0] += end - start; 
+            if (timing) timings[0] += end - start;
 
 
             // Transfer X and y to the GPU
-            if (timing) start = MPI_Wtime(); 
+            if (timing) start = MPI_Wtime();
             cudaMemcpy(d_X, X_batch_memptr, sizeof(double) * X_batch_n_rows * X_batch_n_cols, cudaMemcpyHostToDevice);
             cudaMemcpy(d_y, y_batch_memptr, sizeof(double) * y_n_rows * minibatch_size, cudaMemcpyHostToDevice);
             if (timing) end = MPI_Wtime();
-            if (timing) timings[1] += end - start; 
+            if (timing) timings[1] += end - start;
 
 
-            // feedforward 
-            if (timing) start = MPI_Wtime(); 
+            // feedforward
+            if (timing) start = MPI_Wtime();
             GPUfeedforward(nn, d_X, X_batch_n_rows, X_batch_n_cols, d_W0, d_W1, d_b0, d_b1, d_a1, d_yc, d_z1, d_z2);
-            if (timing) end = MPI_Wtime();  
-            if (timing) timings[2] += end - start; 
+            if (timing) end = MPI_Wtime();
+            if (timing) timings[2] += end - start;
 
 
             // backprop
-            int normalization = minibatch_size * num_procs;
+            int normalization = batch_size;
             if (batch == num_batches-1)     // the last batch is potentially smaller than the others so the normalization factor must be adjusted
-                normalization = X_n_cols - minibatch_size * num_procs * (num_batches - 1);
+                normalization = X_n_cols - (num_batches - 1) * batch_size;
             GPUtranspose(d_X, d_XT, X_batch_n_rows, X_batch_n_cols);
             GPUtranspose(d_W1, d_W1T, nn.W[1].n_rows, nn.W[1].n_cols);
             double myvar = 0.0, *time = &myvar;
-            GPUbackprop(nn, d_y, d_diff, d_yc, y_batch_n_rows, y_batch_n_cols, reg, d_X, d_XT, X_batch_n_cols, d_a1, 
-                d_W0, d_W1, d_W1T, d_my_db1, d_da1, d_dz1_term1, d_dz1_term2, d_dz1, d_my_db0, d_a1T, d_my_dW0, d_my_dW1, num_procs, normalization, time, timing); 
-            if (timing) timings[3] += *time; 
+            GPUbackprop(nn, d_y, d_diff, d_yc, y_batch_n_rows, y_batch_n_cols, reg, d_X, d_XT, X_batch_n_cols, d_a1,
+                d_W0, d_W1, d_W1T, d_my_db1, d_da1, d_dz1_term1, d_dz1_term2, d_dz1, d_my_db0, d_a1T, d_my_dW0, d_my_dW1, num_procs, normalization, time, timing);
+            if (timing) timings[3] += *time;
 
 
-            // copy local gradients from device to host 
-            if (timing) start = MPI_Wtime();  
+            // copy local gradients from device to host
+            if (timing) start = MPI_Wtime();
             cudaMemcpy(my_dW0, d_my_dW0, sizeof(double) * nn.W[0].n_rows * nn.W[0].n_cols, cudaMemcpyDeviceToHost);
             cudaMemcpy(my_dW1, d_my_dW1, sizeof(double) * nn.W[1].n_rows * nn.W[1].n_cols, cudaMemcpyDeviceToHost);
             cudaMemcpy(my_db0, d_my_db0, sizeof(double) * nn.b[0].n_rows * nn.b[0].n_cols, cudaMemcpyDeviceToHost);
             cudaMemcpy(my_db1, d_my_db1, sizeof(double) * nn.b[1].n_rows * nn.b[1].n_cols, cudaMemcpyDeviceToHost);
-            if (timing) end = MPI_Wtime();  
-            if (timing) timings[4] += end - start;  
+            if (timing) end = MPI_Wtime();
+            if (timing) timings[4] += end - start;
 
 
             // MPI all reduce local gradients
-            if (timing) start = MPI_Wtime();  
+            if (timing) start = MPI_Wtime();
             MPI_Allreduce(my_dW0, dW0, nn.W[0].n_rows * nn.W[0].n_cols, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
             MPI_Allreduce(my_dW1, dW1, nn.W[1].n_rows * nn.W[1].n_cols, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
             MPI_Allreduce(my_db0, db0, nn.b[0].n_rows * nn.b[0].n_cols, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
             MPI_Allreduce(my_db1, db1, nn.b[1].n_rows * nn.b[1].n_cols, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
-            if (timing) end = MPI_Wtime();  
-            if (timing) timings[5] += end - start; 
+            if (timing) end = MPI_Wtime();
+            if (timing) timings[5] += end - start;
 
 
             // transfer reduced gradients to each gpu
-            if (timing) start = MPI_Wtime();  
+            if (timing) start = MPI_Wtime();
             cudaMemcpy(d_dW0, dW0, sizeof(double) * nn.W[0].n_rows * nn.W[0].n_cols, cudaMemcpyHostToDevice);
             cudaMemcpy(d_dW1, dW1, sizeof(double) * nn.W[1].n_rows * nn.W[1].n_cols, cudaMemcpyHostToDevice);
             cudaMemcpy(d_db0, db0, sizeof(double) * nn.b[0].n_rows * nn.b[0].n_cols, cudaMemcpyHostToDevice);
             cudaMemcpy(d_db1, db1, sizeof(double) * nn.b[1].n_rows * nn.b[1].n_cols, cudaMemcpyHostToDevice);
-            if (timing) end = MPI_Wtime(); 
-            if (timing) timings[6] += end - start;  
+            if (timing) end = MPI_Wtime();
+            if (timing) timings[6] += end - start;
 
 
             // Gradient descent - W0
-            if (timing) start = MPI_Wtime();  
+            if (timing) start = MPI_Wtime();
             GPUaddition(d_W0, d_dW0, d_W0, 1.0, -learning_rate, nn.W[0].n_rows, nn.W[0].n_cols);
             if (epoch == epochs -1 && batch == num_batches - 1){
                 cudaMemcpy(nn.W[0].memptr(), d_W0, sizeof(double) * nn.W[0].n_rows * nn.W[0].n_cols, cudaMemcpyDeviceToHost);
@@ -674,8 +717,8 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
             if (epoch == epochs -1 && batch == num_batches - 1){
                 cudaMemcpy(nn.b[1].memptr(), d_b1, sizeof(double) * nn.b[1].n_rows * nn.b[1].n_cols, cudaMemcpyDeviceToHost);
             }
-            if (timing) end = MPI_Wtime(); 
-            if (timing) timings[7] += end - start;  
+            if (timing) end = MPI_Wtime();
+            if (timing) timings[7] += end - start;
 
             // determine print_flag
             if (print_every <= 0)
@@ -695,13 +738,13 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
             }
             iter++;
 
-            // Calcualte time taken for remainder of this iteration 
-            if (timing) end = MPI_Wtime();  
-            if (timing) timings[8] += end - start; 
+            // Calcualte time taken for remainder of this iteration
+            if (timing) end = MPI_Wtime();
+            if (timing) timings[8] += end - start;
         }
     }
 
-    if (timing) start = MPI_Wtime();  
+    if (timing) start = MPI_Wtime();
     error_file.close();
 
     // CUDA deallocation
@@ -742,14 +785,14 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
     delete[] my_dW1;
     delete[] my_db0;
     delete[] my_db1;
-    if (timing) end = MPI_Wtime();  
+    if (timing) end = MPI_Wtime();
     if (timing && rank==0) std::cout << "cleanup: " << end - start << " seconds" << std::endl;
 
     // calculate total times when trying to optimize code
     if (timing){
         for (int i = 0; i < timings.size(); i++)
         {
-            double reduced_time = 0.0; 
+            double reduced_time = 0.0;
             MPI_Reduce(&timings[i], &reduced_time, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
             if (timing && rank==0) std::cout << "time " << i << ": " << reduced_time/num_procs << " seconds" << std::endl;
         }
