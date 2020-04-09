@@ -462,11 +462,6 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
           my_y_batches.push_back(my_y);
       }
     }else{
-      if (rank==num_procs-1){ // last process has a different size (fewer)
-        int new_minibatch_size = batch_size - (num_procs-1)*minibatch_size
-      }else{
-        int new_minibatch_size = minibatch_size
-      }
 
       // calculate how many elements to send to each process
       for (int i = 0; i < num_procs; i++)
@@ -492,8 +487,8 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
             displs_y[i] = y_n_rows * minibatch_size * i + y_n_rows * batch * batch_size;
           }
 
-          arma::mat my_X(X_n_rows, new_minibatch_size);
-          arma::mat my_y(y_n_rows, new_minibatch_size);
+          arma::mat my_X(X_n_rows, recv_count_x/X_n_rows);
+          arma::mat my_y(y_n_rows, recv_count_y/y_n_rows);
           MPI_Scatterv(X.memptr(), counts_x, displs_x, MPI_DOUBLE, my_X.memptr(), recv_count_x, MPI_DOUBLE, 0, MPI_COMM_WORLD);
           MPI_Scatterv(y.memptr(), counts_y, displs_y, MPI_DOUBLE, my_y.memptr(), recv_count_y, MPI_DOUBLE, 0, MPI_COMM_WORLD);
           my_X_batches.push_back(my_X);
@@ -504,8 +499,7 @@ void parallel_train(NeuralNetwork &nn, const arma::mat &X, const arma::mat &y,
     // scatterv for final batch
     for (int i = 0; i < num_procs; i++)
     {
-        // int last_batch_size = X_n_cols - (num_batches-1)*batch_size;
-        int last_batch_size = X_n_cols - minibatch_size*num_procs*(num_batches - 1);
+        int last_batch_size = X_n_cols - batch_size*(num_batches - 1);
         int last_minibatch_size = (last_batch_size + num_procs - 1) / num_procs; // new minibatch size for this last batch. last process gets the least.
 
         displs_x[i] = X_n_rows * last_minibatch_size * i + X_n_rows * (num_batches - 1) * batch_size;
