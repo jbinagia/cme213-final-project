@@ -41,9 +41,47 @@ inline double stop_timer(event_pair* p) {
 
 int useless_gpu_add_one(int t);
 
+// Define struct for facilitating computations in gpuGEMM4d1
+// - idea for Matrix, GetElement(), and GetSubMatrix() came from CUDA C++ Programming Guide
+// - Note here matrices are stored in column-major order:
+// - I.e. M(row, col) = *(M.elements + col * M.stride + row)
+typedef struct
+{
+    int width;
+    int height;
+    int stride;
+    double *elements;
+} Matrix;
+
+__device__ 
+double GetElement(const Matrix A, int row, int col);
+
+__device__ 
+Matrix GetSubMatrix(Matrix B, int row, int col, int height, int width);
+
+__global__
+void gpuGEMM4d1(const Matrix A, const Matrix B, Matrix C, double alpha, double beta,
+           int M, int N, int K);
+
+__global__
+void gpuGEMM4d2(const Matrix A, const Matrix B, Matrix C, double alpha, double beta,
+           int M, int N, int K);
+
 __global__
 void gpuGEMM(double* A, double* B, double* C, double alpha, double beta, int M,
            int N, int K);
+
+__global__
+void naiveGEMM(double* __restrict__ A, double* __restrict__ B,
+           double* __restrict__ C, double alpha, double beta,
+           int M, int N, int K);
+
+__global__
+void repmatKernel(double* mat1, double* mat2, int M, int N);
+
+int myNaiveGEMM(double* __restrict__ A, double* __restrict__ B,
+           double* __restrict__ C, double* alpha, double* beta,
+           int M, int N, int K);
 
 int myGEMM(double* A, double* B, double* C, double* alpha, double* beta, int M,
            int N, int K);

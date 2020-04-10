@@ -39,16 +39,6 @@ int useless_gpu_add_one(int t) {
     return result;
 }
 
-// Define struct for facilitating computations in gpuGEMM4d1
-    // - idea for Matrix, GetElement(), and GetSubMatrix() came from CUDA C++ Programming Guide
-    // - Note here matrices are stored in column-major order:
-    // - I.e. M(row, col) = *(M.elements + col * M.stride + row)
-typedef struct {
-    int width;
-    int height;
-    int stride;
-    double* elements;
-} Matrix;
 
 // Define function for retrieving element of matrix 
 __device__ 
